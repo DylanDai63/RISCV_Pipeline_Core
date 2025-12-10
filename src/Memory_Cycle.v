@@ -1,26 +1,16 @@
-// Copyright 2023 MERL-DSU
+// `include "Data_Memory.v"
 
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-
-//        http://www.apache.org/licenses/LICENSE-2.0
-
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
-
-module memory_cycle(clk, rst, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, WriteDataM, 
+module Memory_Cycle(clock, reset, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, WriteDataM, 
     ALU_ResultM, RegWriteW, ResultSrcW, RD_W, PCPlus4W, ALU_ResultW, ReadDataW);
     
     // Declaration of I/Os
-    input clk, rst, RegWriteM, MemWriteM, ResultSrcM;
+    input clock, reset, RegWriteM, MemWriteM;
+    input [1:0] ResultSrcM;
     input [4:0] RD_M; 
     input [31:0] PCPlus4M, WriteDataM, ALU_ResultM;
 
-    output RegWriteW, ResultSrcW; 
+    output RegWriteW;
+    output [1:0] ResultSrcW; 
     output [4:0] RD_W;
     output [31:0] PCPlus4W, ALU_ResultW, ReadDataW;
 
@@ -28,14 +18,15 @@ module memory_cycle(clk, rst, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, 
     wire [31:0] ReadDataM;
 
     // Declaration of Interim Registers
-    reg RegWriteM_r, ResultSrcM_r;
+    reg RegWriteM_r;
+    reg [1:0] ResultSrcM_r;
     reg [4:0] RD_M_r;
     reg [31:0] PCPlus4M_r, ALU_ResultM_r, ReadDataM_r;
 
     // Declaration of Module Initiation
     Data_Memory dmem (
-                        .clk(clk),
-                        .rst(rst),
+                        .clock(clock),
+                        .reset(reset),
                         .WE(MemWriteM),
                         .WD(WriteDataM),
                         .A(ALU_ResultM),
@@ -43,10 +34,10 @@ module memory_cycle(clk, rst, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, 
                     );
 
     // Memory Stage Register Logic
-    always @(posedge clk or negedge rst) begin
-        if (rst == 1'b0) begin
+    always @(posedge clock or posedge reset) begin
+        if (reset == 1'b1) begin
             RegWriteM_r <= 1'b0; 
-            ResultSrcM_r <= 1'b0;
+            ResultSrcM_r <= 2'b00;
             RD_M_r <= 5'h00;
             PCPlus4M_r <= 32'h00000000; 
             ALU_ResultM_r <= 32'h00000000; 
