@@ -118,11 +118,17 @@ U-Type & LUI, AUIPC & 0110111, 0010111 \\
 
 While the baseline pipeline structure is present, the original processor lacks essential logic to handle specific pipeline hazards, which causes functional errors in standard code execution.
 
+\subsubsection{Incomplete Data Forwarding Logic}
+
+\textbf{The Issue:} The baseline processor lacks complete data forwarding implementation. While the Execute stage contains 4-to-1 multiplexer infrastructure for potential forwarding, the Hazard Unit does not generate correct forwarding control signals. This causes RAW (Read-After-Write) hazards to produce incorrect results.
+
+\textbf{Evidence:} Running the test program shows that \texttt{add x6, x5, x1} produces an incorrect value because the ALU receives stale register data instead of the forwarded result from the previous load instruction.
+
 \subsubsection{Missing Load-Use Hazard Detection (Stalling)}
 
-\textbf{The Issue:} If an instruction tries to read a register that the immediately preceding instruction is loading from memory (e.g., \texttt{LW x1, 0(x2)} followed by \texttt{ADD x3, x1, x4}), the data is not yet available in the Execute stage. Forwarding cannot solve this because the data is still in the Data Memory.
+\textbf{The Issue:} If an instruction tries to read a register that the immediately preceding instruction is loading from memory (e.g., \texttt{LW x1, 0(x2)} followed by \texttt{ADD x3, x1, x4}), the data is not yet available in the Execute stage. Even with forwarding, a one-cycle stall is required because the load data is still in the Data Memory.
 
-\textbf{Evidence:} The original Hazard\_Unit.v only outputs ForwardAE and ForwardBE. It lacks outputs for StallF (freeze PC) and StallD (freeze Decode) or FlushE. Without this, the processor will execute the ADD using old/incorrect data.
+\textbf{Evidence:} The original Hazard\_Unit.v lacks outputs for StallF (freeze PC), StallD (freeze Decode), and FlushE (insert bubble). Without this, the processor cannot handle load-use dependencies correctly.
 
 \subsubsection{Missing Control Hazard Flushing}
 
@@ -146,7 +152,7 @@ While the baseline pipeline structure is present, the original processor lacks e
 The baseline design demonstrates a solid foundation with several notable strengths:
 
 \begin{enumerate}
-    \item \textbf{Basic Data Forwarding Infrastructure:} The original Hazard Unit includes forwarding logic (ForwardAE, ForwardBE) that correctly detects RAW hazards between Execute and Memory/Writeback stages. The 4-to-1 multiplexers in the Execute stage are already in place.
+    \item \textbf{Forwarding Multiplexer Infrastructure:} The Execute stage already contains 4-to-1 multiplexers that can select between register file outputs and forwarded values. This hardware foundation reduces the implementation effort required to add complete forwarding support.
 
     \item \textbf{Modular and Clean Architecture:} The design is highly modular, with distinct files for each pipeline stage (Fetch\_Cycle.v, Decode\_Cycle.v, etc.). This separation makes debugging and extension significantly easier.
 
@@ -160,6 +166,8 @@ The baseline design demonstrates a solid foundation with several notable strengt
 Based on the critical baseline limitations identified, we planned the following optimizations:
 
 \begin{enumerate}
+    \item \textbf{Complete Data Forwarding Implementation:} Implement proper forwarding logic in the Hazard Unit to generate ForwardAE and ForwardBE signals. These 2-bit signals control the Execute stage multiplexers to select data from Memory stage (priority) or Writeback stage when RAW hazards are detected.
+
     \item \textbf{Load-Use Hazard Detection with Stalling:} Extend the Hazard Unit to detect when a load instruction in Execute will be used by the instruction in Decode. Generate StallF, StallD, and FlushE signals to insert a pipeline bubble.
 
     \item \textbf{Control Hazard Flushing:} Add FlushD signal generation when a branch is taken (PCSrcE = 1). Modify Decode\_Cycle pipeline registers to clear control signals on flush, converting the incorrect instruction to a NOP.
@@ -434,12 +442,12 @@ Before analyzing each phase, we establish the correct ``golden'' execution:
 % -----------------------------------------------------------------------------
 \subsection{Phase 0: Baseline (No Hazard Handling)}
 
-Phase 0 represents the original MERL-DSU baseline processor without any hazard handling mechanisms.
+Phase 0 represents the original MERL-DSU baseline processor without functional hazard handling mechanisms.
 
 \subsubsection{Implementation Status}
 
 \begin{itemize}[noitemsep]
-    \item \textbf{Data Forwarding:} Not implemented
+    \item \textbf{Data Forwarding:} Multiplexer infrastructure exists but forwarding logic incomplete/non-functional
     \item \textbf{Load-Use Stalling:} Not implemented
     \item \textbf{Branch Flushing:} Not implemented
 \end{itemize}
