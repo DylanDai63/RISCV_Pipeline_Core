@@ -117,11 +117,23 @@ U-Type & LUI, AUIPC & 0110111, 0010111 \\
 
 \subsection{Phase 0 Baseline: Our Contributions}
 
-Our Phase 0 baseline processor extends the original MERL-DSU framework with the following key contributions:
+\subsubsection{Original MERL-DSU Framework Limitations}
 
-\subsubsection{Complete Data Forwarding Implementation}
+The original MERL-DSU open-source framework provided only a basic pipeline structure with the following limitations:
 
-We implemented comprehensive data forwarding logic in the Hazard Unit to resolve RAW (Read-After-Write) hazards:
+\begin{itemize}
+    \item \textbf{Incomplete Hazard Unit:} The original Hazard\_unit.v contained only placeholder forwarding signal declarations without functional logic. The ForwardAE/ForwardBE signals were declared but not properly computed based on register dependencies.
+    \item \textbf{No JALR/AUIPC Support:} The control unit lacked the ALUSrcA and PCTargetSrc signals necessary for indirect jumps and PC-relative addressing.
+    \item \textbf{No Pipeline Hazard Handling:} Missing stall and flush mechanisms entirely---no StallF, StallD, FlushE, or FlushD signals.
+\end{itemize}
+
+\subsubsection{Our Phase 0 Implementation Work}
+
+Starting from this incomplete framework, we designed and implemented a fully functional baseline processor. Our Phase 0 contributions include:
+
+\textbf{1. Complete Data Forwarding Logic in Hazard Unit}
+
+We designed and implemented comprehensive data forwarding logic from scratch in the Hazard Unit to resolve RAW (Read-After-Write) hazards:
 
 \begin{itemize}
     \item \textbf{Execute Stage Forwarding (ForwardAE/ForwardBE):} 2-bit signals controlling 4-to-1 multiplexers in the Execute stage. These forward data from Memory stage (priority) or Writeback stage to the ALU inputs.
@@ -130,16 +142,26 @@ We implemented comprehensive data forwarding logic in the Hazard Unit to resolve
 
 This allows most RAW hazards to be resolved without stalls, significantly improving performance.
 
-\subsubsection{JALR and AUIPC Instruction Support}
+\textbf{2. JALR and AUIPC Instruction Support}
 
-We added full support for JALR (Jump and Link Register) and AUIPC (Add Upper Immediate to PC) instructions:
+We extended the Control Unit and datapath to support JALR (Jump and Link Register) and AUIPC (Add Upper Immediate to PC) instructions:
 
 \begin{itemize}
-    \item \textbf{ALUSrcA Control:} New control signal selecting between register value and PC for ALU input A
-    \item \textbf{PCTargetSrc Control:} Selects between PC+Immediate (for branches/JAL) and ALU result (for JALR)
+    \item \textbf{ALUSrcA Control Signal:} New control signal added to select between register value and PC for ALU input A (required for AUIPC)
+    \item \textbf{PCTargetSrc Control Signal:} New control signal to select between PC+Immediate (for branches/JAL) and ALU result (for JALR)
+    \item \textbf{Control Unit Modifications:} Extended Main\_Decoder.v and added decoding logic for opcodes 0010111 (AUIPC) and 1100111 (JALR)
 \end{itemize}
 
-\subsubsection{Remaining Limitations for Future Phases}
+\textbf{3. Decode Stage Forwarding Path}
+
+We added forwarding multiplexers in the Decode stage (Decode\_Cycle.v) to support branch comparisons when source registers are being written:
+
+\begin{itemize}
+    \item Added RD1\_D\_mux and RD2\_D\_mux wires with forwarding selection logic
+    \item Connected ForwardAD/ForwardBD signals from Hazard Unit to control the muxes
+\end{itemize}
+
+\subsubsection{Remaining Limitations (Addressed in Phase 1-3)}
 
 While Phase 0 handles most data hazards through forwarding, two critical issues remain:
 
@@ -156,20 +178,20 @@ These limitations are addressed in subsequent phases (Phase 1 and Phase 2).
 % =============================================================================
 \section{Part 2: Key Strengths and Areas for Improvement}
 
-\subsection{Phase 0 Baseline Strengths}
+\subsection{Phase 0 Baseline: Our Implementation Strengths}
 
-Our Phase 0 baseline processor demonstrates significant improvements over the original MERL-DSU framework:
+Through our Phase 0 implementation work, we transformed the incomplete MERL-DSU framework into a functional baseline processor with the following strengths:
 
 \begin{enumerate}
-    \item \textbf{Complete Data Forwarding Logic:} We implemented full forwarding support in the Hazard Unit with ForwardAE/ForwardBE (2-bit) for Execute stage and ForwardAD/ForwardBD (1-bit) for Decode stage. This eliminates most pipeline stalls due to RAW hazards.
+    \item \textbf{Fully Functional Data Forwarding:} We designed and implemented complete forwarding logic in the Hazard Unit with ForwardAE/ForwardBE (2-bit) for Execute stage and ForwardAD/ForwardBD (1-bit) for Decode stage. This eliminates most pipeline stalls due to RAW hazards---a critical feature missing from the original framework.
 
-    \item \textbf{Extended Instruction Support:} Added proper handling for JALR and AUIPC instructions through new control signals (ALUSrcA, PCTargetSrc), enabling PC-relative addressing and indirect jumps.
+    \item \textbf{Extended Instruction Set Support:} We added proper handling for JALR and AUIPC instructions by designing new control signals (ALUSrcA, PCTargetSrc) and modifying the Control Unit decoding logic. These instructions were not supported in the original framework.
 
-    \item \textbf{Modular and Clean Architecture:} The design maintains a highly modular structure with distinct files for each pipeline stage (Fetch\_Cycle.v, Decode\_Cycle.v, Execute\_Cycle.v, etc.). This separation makes debugging and extension significantly easier.
+    \item \textbf{Integrated Forwarding Datapath:} We modified Decode\_Cycle.v and Execute\_Cycle.v to add the necessary forwarding multiplexers and connect them to our Hazard Unit signals, creating a complete forwarding datapath.
 
-    \item \textbf{Comprehensive Branch Support:} The Control Unit supports all six RV32I branch types (BEQ, BNE, BLT, BGE, BLTU, BGEU) with proper signed/unsigned comparisons.
+    \item \textbf{Comprehensive Branch Support:} The processor supports all six RV32I branch types (BEQ, BNE, BLT, BGE, BLTU, BGEU) with proper signed/unsigned comparisons through our Branch\_Module implementation.
 
-    \item \textbf{Byte-Addressable Memory:} The Data Memory accurately simulates a real byte-addressable system by using an 8-bit wide memory array and concatenating four bytes for 32-bit reads.
+    \item \textbf{Clean Modular Architecture:} We maintained a highly modular structure with distinct files for each pipeline stage (Fetch\_Cycle.v, Decode\_Cycle.v, Execute\_Cycle.v, etc.), making our subsequent optimization phases easier to implement.
 \end{enumerate}
 
 \subsection{Planned Optimizations (Phase 1-3)}
@@ -196,11 +218,11 @@ This section describes our phase-by-phase implementation, starting from our Phas
 % -----------------------------------------------------------------------------
 \subsection{Phase 0: Baseline Implementation (Our Foundation)}
 
-Phase 0 represents our baseline processor, which we developed by extending the original MERL-DSU framework with complete data forwarding and extended instruction support.
+Phase 0 represents our baseline processor, which we designed and implemented by transforming the incomplete MERL-DSU framework into a functional pipelined processor. The original framework lacked working forwarding logic and JALR/AUIPC support---we implemented these critical features from scratch.
 
-\subsubsection{Complete Hazard Unit with Data Forwarding}
+\subsubsection{Our Hazard Unit Design with Complete Data Forwarding}
 
-We implemented a fully functional Hazard Unit with comprehensive forwarding logic:
+We designed and implemented a fully functional Hazard Unit with comprehensive forwarding logic. The original MERL-DSU Hazard\_unit.v only had placeholder signal declarations; we wrote the actual forwarding detection and control logic:
 
 \begin{lstlisting}[language=Verilog, caption=Phase 0 - Our Baseline Hazard Unit with Full Forwarding]
 module Hazard_Unit(
@@ -228,12 +250,12 @@ module Hazard_Unit(
 endmodule
 \end{lstlisting}
 
-\subsubsection{JALR and AUIPC Support}
+\subsubsection{Our JALR and AUIPC Implementation}
 
-We extended the Decode and Execute stages to support JALR and AUIPC instructions:
+We designed and added new control signals to support JALR and AUIPC instructions, which were not present in the original framework:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 0 - JALR/AUIPC Control Signals]
-// New outputs added to Decode_Cycle module:
+\begin{lstlisting}[language=Verilog, caption=Phase 0 - Our JALR/AUIPC Control Signal Design]
+// New outputs we added to Decode_Cycle module:
 output ALUSrcE_A;    // Selects PC (1) or register (0) for ALU input A
 output PCTargetSrcE; // Selects ALU result (1) or PC+Imm (0) for jump target
 
@@ -241,12 +263,12 @@ output PCTargetSrcE; // Selects ALU result (1) or PC+Imm (0) for jump target
 // JALR: PCTargetSrcE = 1 (use ALU result as jump target)
 \end{lstlisting}
 
-\subsubsection{Decode Stage Forwarding Multiplexers}
+\subsubsection{Our Decode Stage Forwarding Datapath}
 
-We added forwarding muxes in the Decode stage for branch operands:
+We designed and added forwarding multiplexers in the Decode stage to enable correct branch comparisons:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 0 - Decode Stage Forwarding Muxes]
-// Forwarding Muxes for branch comparison operands
+\begin{lstlisting}[language=Verilog, caption=Phase 0 - Our Decode Stage Forwarding Mux Design]
+// Forwarding Muxes we added for branch comparison operands
 wire [31:0] RD1_D_mux, RD2_D_mux;
 assign RD1_D_mux = (ForwardA_D == 1'b1) ? ResultW : RD1_D;
 assign RD2_D_mux = (ForwardB_D == 1'b1) ? ResultW : RD2_D;
