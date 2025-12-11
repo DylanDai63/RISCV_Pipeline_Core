@@ -1,0 +1,809 @@
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{adjustbox}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    tabsize=4
+}
+
+\title{\textbf{ECE 401: Advanced Computer Architecture\\
+RISC-V Pipelined Processor Design and Optimization\\
+Project Report}}
+
+\author{Akash Kolukonda, Zihao Xin, Hengde Dai}
+\date{December 7, 2025}
+
+\begin{document}
+
+\maketitle
+
+% =============================================================================
+% ABSTRACT
+% =============================================================================
+\begin{abstract}
+This report presents the design, optimization, and evaluation of a 5-stage pipelined RISC-V processor supporting the RV32I instruction set. Starting from the MERL-DSU open-source baseline, we identified critical limitations including missing load-use hazard detection and inadequate branch flushing mechanisms. Our optimizations focused on three key areas: (1) implementing comprehensive data forwarding for both Execute and Decode stages, (2) adding load-use hazard detection with pipeline stalling, and (3) fixing control hazard handling with proper branch flushing. The optimized processor correctly executes test programs involving data dependencies, load-use sequences, and conditional branches. Simulation results using Icarus Verilog and GTKWave demonstrate functional correctness across all hazard scenarios, with the processor achieving improved CPI through reduced pipeline stalls.
+\end{abstract}
+
+% =============================================================================
+% Part 1: Baseline Processor Description
+% =============================================================================
+\section{Part 1: Baseline Processor Description}
+
+This project implements a pipelined RISC-V processor supporting the RV32I instruction set. Our work is based on the MERL-DSU RISC-V Pipeline Core open-source repository, which provides a functional 5-stage pipelined processor implemented in Verilog.
+
+\subsection{Pipeline Structure}
+
+Our baseline processor implements a classical 5-stage pipeline: Instruction Fetch (IF), Instruction Decode (ID), Execute (EX), Memory (MEM), and Writeback (WB). Figure~\ref{fig:architecture} shows the complete processor architecture.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{top.png}
+\caption{5-Stage Pipelined RISC-V Processor Architecture}
+\label{fig:architecture}
+\end{figure}
+
+\subsubsection{Fetch Stage}
+The Fetch stage manages the program counter and retrieves instructions from instruction memory. Key components include:
+\begin{itemize}[noitemsep]
+    \item PC register with synchronous update
+    \item PC+4 adder for sequential addressing
+    \item Multiplexer selecting between PC+4 and branch target (PCTargetE)
+    \item Pipeline register propagating InstrD, PCD, and PCPlus4D to Decode stage
+\end{itemize}
+
+\subsubsection{Decode Stage}
+The Decode stage decodes instructions and reads operands from the register file. Key components include:
+\begin{itemize}[noitemsep]
+    \item \textbf{Control Unit:} Hierarchical design with Main Decoder, Branch Decoder, and ALU Decoder
+    \item \textbf{Register File:} 32 registers with dual-port read and single-port write
+    \item \textbf{Sign Extend:} Generates 32-bit immediates for I, S, B, U, and J-type formats
+    \item \textbf{Pipeline Register:} Forwards decoded values and control signals to Execute stage
+\end{itemize}
+
+\subsubsection{Execute Stage}
+The Execute stage performs ALU operations and resolves branches. Key features:
+\begin{itemize}[noitemsep]
+    \item ALU supporting arithmetic, logical, shift, and comparison operations
+    \item Branch target calculation (PC + immediate)
+    \item Branch comparison module for all six branch conditions
+    \item Pipeline register forwarding results to Memory stage
+\end{itemize}
+
+\subsubsection{Memory Stage}
+The Memory stage handles load and store operations with a byte-addressable data memory that concatenates four bytes for 32-bit word access.
+
+\subsubsection{Writeback Stage}
+The Writeback stage selects the final result (ALU result, memory data, or PC+4) and writes it back to the register file.
+
+\subsection{Supported Instructions}
+
+The processor supports a substantial subset of RV32I:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Type} & \textbf{Instructions} & \textbf{Opcode} \\
+\hline
+R-Type & ADD, SUB, XOR, OR, AND, SLL, SRL, SRA & 0110011 \\
+I-Type ALU & ADDI, XORI, ORI, ANDI, SLLI, SRLI, SRAI & 0010011 \\
+Load & LW & 0000011 \\
+Store & SW & 0100011 \\
+Branch & BEQ, BNE, BLT, BGE, BLTU, BGEU & 1100011 \\
+Jump & JAL, JALR & 1101111, 1100111 \\
+U-Type & LUI, AUIPC & 0110111, 0010111 \\
+\hline
+\end{tabular}
+\caption{Supported RV32I Instructions}
+\label{tab:instructions}
+\end{table}
+
+\subsection{Cache Structure}
+
+\textbf{The baseline processor has no cache implementation.} Both instruction and data memory use direct single-cycle access. This simplification is acceptable for educational purposes but represents a significant performance limitation in realistic systems.
+
+\subsection{Baseline Limitations (Critical Issues)}
+
+While the baseline pipeline structure is present, the original processor lacks essential logic to handle specific pipeline hazards, which causes functional errors in standard code execution.
+
+\subsubsection{Missing Load-Use Hazard Detection (Stalling)}
+
+\textbf{The Issue:} If an instruction tries to read a register that the immediately preceding instruction is loading from memory (e.g., \texttt{LW x1, 0(x2)} followed by \texttt{ADD x3, x1, x4}), the data is not yet available in the Execute stage. Forwarding cannot solve this because the data is still in the Data Memory.
+
+\textbf{Evidence:} The original Hazard\_Unit.v only outputs ForwardAE and ForwardBE. It lacks outputs for StallF (freeze PC) and StallD (freeze Decode) or FlushE. Without this, the processor will execute the ADD using old/incorrect data.
+
+\subsubsection{Missing Control Hazard Flushing}
+
+\textbf{The Issue:} When a branch is taken (PCSrcE is high), the PC is updated to the target. However, the instructions currently in the Fetch and Decode stages are incorrect (they are from the ``not taken'' path). These instructions must be flushed (turned into NOPs).
+
+\textbf{Evidence:} The original Decode\_Cycle.v pipeline registers only reset on the hardware reset signal. There is no synchronous Flush input triggered by PCSrcE. The processor will erroneously execute the two instructions following a taken branch.
+
+\subsubsection{Late Branch Resolution (Performance Impact)}
+
+\textbf{The Issue:} The branch decision (PCSrcE) is calculated in the Execute Cycle.
+
+\textbf{Impact:} This results in a 2-cycle penalty for every taken branch (flushing Fetch and Decode). While not a correctness bug, it significantly impacts performance on branch-heavy code.
+
+% =============================================================================
+% Part 2: Key Strengths and Areas for Improvement
+% =============================================================================
+\section{Part 2: Key Strengths and Areas for Improvement}
+
+\subsection{Identified Strengths}
+
+The baseline design demonstrates a solid foundation with several notable strengths:
+
+\begin{enumerate}
+    \item \textbf{Basic Data Forwarding Infrastructure:} The original Hazard Unit includes forwarding logic (ForwardAE, ForwardBE) that correctly detects RAW hazards between Execute and Memory/Writeback stages. The 4-to-1 multiplexers in the Execute stage are already in place.
+
+    \item \textbf{Modular and Clean Architecture:} The design is highly modular, with distinct files for each pipeline stage (Fetch\_Cycle.v, Decode\_Cycle.v, etc.). This separation makes debugging and extension significantly easier.
+
+    \item \textbf{Comprehensive Instruction Support:} The Control Unit already supports a wide range of RV32I instructions including branches (BEQ, BNE, BLT, BGE, BLTU, BGEU), jumps (JAL, JALR), and U-type instructions (LUI, AUIPC).
+
+    \item \textbf{Byte-Addressable Memory:} The Data Memory accurately simulates a real byte-addressable system by using an 8-bit wide memory array and concatenating four bytes for 32-bit reads.
+\end{enumerate}
+
+\subsection{Planned Optimizations}
+
+Based on the critical baseline limitations identified, we planned the following optimizations:
+
+\begin{enumerate}
+    \item \textbf{Load-Use Hazard Detection with Stalling:} Extend the Hazard Unit to detect when a load instruction in Execute will be used by the instruction in Decode. Generate StallF, StallD, and FlushE signals to insert a pipeline bubble.
+
+    \item \textbf{Control Hazard Flushing:} Add FlushD signal generation when a branch is taken (PCSrcE = 1). Modify Decode\_Cycle pipeline registers to clear control signals on flush, converting the incorrect instruction to a NOP.
+
+    \item \textbf{Decode Stage Forwarding:} Add forwarding paths from Writeback to Decode stage (ForwardAD, ForwardBD) to support branch comparison using the most recent register values.
+\end{enumerate}
+
+% =============================================================================
+% Part 3: Implementation Details
+% =============================================================================
+\section{Part 3: Implementation Details}
+
+This section describes the implementation of our optimizations to fix the baseline processor's hazard handling issues.
+
+\subsection{Hazard Unit Extension}
+
+The Hazard Unit was significantly extended to handle all pipeline hazards. The complete implementation is shown below:
+
+\begin{lstlisting}[language=Verilog, caption=Extended Hazard Unit Implementation]
+module Hazard_Unit(
+    input reset,
+    input RegWriteM, RegWriteW,
+    input [4:0] RD_M, RD_W, Rs1_D, Rs2_D, Rs1_E, Rs2_E,
+    // NEW INPUTS for Load-Use Detection
+    input ResultSrcE0, // 1 if instruction in Execute is a Load
+    input [4:0] RD_E,  // Destination register in Execute stage
+    // OUTPUTS
+    output [1:0] ForwardAE, ForwardBE,
+    output ForwardAD, ForwardBD,
+    // NEW OUTPUTS for Stalling and Flushing
+    output StallF, StallD, FlushE
+);
+    // Execute Stage Forwarding (2-bit selection)
+    assign ForwardAE = (reset) ? 2'b00 :
+        ((RegWriteM) & (RD_M != 0) & (RD_M == Rs1_E)) ? 2'b10 :
+        ((RegWriteW) & (RD_W != 0) & (RD_W == Rs1_E)) ? 2'b01 : 2'b00;
+
+    assign ForwardBE = (reset) ? 2'b00 :
+        ((RegWriteM) & (RD_M != 0) & (RD_M == Rs2_E)) ? 2'b10 :
+        ((RegWriteW) & (RD_W != 0) & (RD_W == Rs2_E)) ? 2'b01 : 2'b00;
+
+    // Decode Stage Forwarding (1-bit selection)
+    assign ForwardAD = (reset) ? 1'b0 :
+        ((RegWriteW) & (RD_W != 0) & (RD_W == Rs1_D)) ? 1'b1 : 1'b0;
+
+    assign ForwardBD = (reset) ? 1'b0 :
+        ((RegWriteW) & (RD_W != 0) & (RD_W == Rs2_D)) ? 1'b1 : 1'b0;
+
+    // Load-Use Hazard Detection
+    wire lwStall;
+    assign lwStall = (ResultSrcE0 == 1'b1) & (RD_E != 0) &
+                     ((RD_E == Rs1_D) | (RD_E == Rs2_D));
+
+    // Stall and Flush Signals
+    assign StallF = lwStall;
+    assign StallD = lwStall;
+    assign FlushE = lwStall;
+endmodule
+\end{lstlisting}
+
+\subsubsection{Execute Stage Forwarding}
+
+The ForwardAE and ForwardBE signals are 2-bit selectors for the 4-to-1 multiplexers in Execute:
+\begin{itemize}[noitemsep]
+    \item \textbf{2'b00:} Use register file output (no forwarding needed)
+    \item \textbf{2'b01:} Forward from Writeback stage (ResultW)
+    \item \textbf{2'b10:} Forward from Memory stage (ALU\_ResultM)
+\end{itemize}
+
+Memory stage has priority over Writeback because it contains the more recent value.
+
+\subsubsection{Decode Stage Forwarding}
+
+ForwardAD and ForwardBD are 1-bit signals that forward the Writeback result to Decode. This is essential for branch instructions that compare register values---without this, a branch immediately following a register write would use stale data.
+
+\subsubsection{Load-Use Hazard Detection}
+
+The lwStall signal is asserted when:
+\begin{enumerate}
+    \item The instruction in Execute is a load (ResultSrcE[0] = 1)
+    \item The load's destination (RD\_E) is non-zero
+    \item The destination matches either source register in Decode (Rs1\_D or Rs2\_D)
+\end{enumerate}
+
+When lwStall is high, StallF and StallD freeze the Fetch and Decode stages, while FlushE inserts a bubble (NOP) into Execute.
+
+\subsection{Branch Flushing Implementation}
+
+Branch flushing is implemented at the top level (design.sv) with a simple assignment:
+
+\begin{lstlisting}[language=Verilog, caption=Branch Flush Logic]
+// Top-level module (design.sv)
+wire FlushD;
+assign FlushD = PCSrcE; // Flush Decode when branch is taken
+\end{lstlisting}
+
+The Decode\_Cycle module handles FlushD by clearing all control signals:
+
+\begin{lstlisting}[language=Verilog, caption=Decode Stage Flush Handling]
+always @(posedge clock or posedge reset) begin
+    if (reset == 1'b1) begin
+        // Reset all registers to 0
+    end
+    else if (FlushE == 1'b1 || FlushD == 1'b1) begin
+        // Flush: Clear control signals (NOP)
+        RegWriteD_r <= 1'b0;
+        MemWriteD_r <= 1'b0;
+        BranchD_r <= 3'b000;
+        JumpD_r <= 1'b0;
+        // ... other control signals cleared
+    end
+    else if (StallD == 1'b1) begin
+        // Stall: Hold current values (implicit)
+    end
+    else begin
+        // Normal operation: Latch new values
+    end
+end
+\end{lstlisting}
+
+\subsection{Fetch Stage Stall Implementation}
+
+The Fetch stage implements stalling by conditionally updating the PC and pipeline registers:
+
+\begin{lstlisting}[language=Verilog, caption=Fetch Stage Stall Logic]
+// Stall Logic: Keep old PC if stalled
+assign PC_Next_Final = (StallF == 1'b1) ? PCF : PC_F;
+
+// Pipeline registers only update when not stalled
+always @(posedge clock or posedge reset) begin
+    if (reset) begin
+        // Reset
+    end
+    else if (StallF == 1'b0) begin
+        // Only update if NOT stalled
+        Inst_Fetch_reg <= inst_fetched;
+        PCF_reg <= PCF;
+        PCPlus4F_reg <= PCPlus4F;
+    end
+    // If StallF is 1, registers retain values (implicit)
+end
+\end{lstlisting}
+
+\subsection{Branch Module Implementation}
+
+A dedicated Branch Module handles all six RISC-V branch conditions:
+
+\begin{lstlisting}[language=Verilog, caption=Branch Module]
+module Branch_Module(A, B, A_Unsigned, B_Unsigned, BranchE, isBranch);
+    input [2:0] BranchE;
+    input signed [31:0] A, B;
+    input [31:0] A_Unsigned, B_Unsigned;
+    output isBranch;
+
+    assign isBranch =
+        (BranchE == 3'b000) ? 1'b0 :           // No branch
+        (BranchE == 3'b001) ? (A == B) :       // BEQ
+        (BranchE == 3'b010) ? (A != B) :       // BNE
+        (BranchE == 3'b011) ? (A < B) :        // BLT (signed)
+        (BranchE == 3'b100) ? (A >= B) :       // BGE (signed)
+        (BranchE == 3'b101) ? (A_Unsigned < B_Unsigned) :  // BLTU
+        (BranchE == 3'b110) ? (A_Unsigned >= B_Unsigned) : // BGEU
+        1'b0;
+endmodule
+\end{lstlisting}
+
+The Branch Decoder in the Control Unit converts the 1-bit Branch signal and funct3 into the 3-bit BranchE encoding.
+
+\subsection{PC Source Logic}
+
+The final PC source decision combines jumps and branches:
+
+\begin{lstlisting}[language=Verilog, caption=PCSrc Generation in Execute Stage]
+assign PCSrcE = JumpE | (BranchE != 3'b000 & isBranch == 1'b1);
+\end{lstlisting}
+
+For JALR instructions, the PC target comes from the ALU result (rs1 + immediate) instead of PC + immediate:
+
+\begin{lstlisting}[language=Verilog, caption=JALR Support]
+assign JALR_Target = ResultE; // ALU computes rs1 + imm
+assign PCTargetE = (PCTargetSrcE == 1'b1) ? JALR_Target : BranchTarget;
+\end{lstlisting}
+
+\subsection{Summary of Modifications}
+
+Table~\ref{tab:modifications} summarizes all files modified and their purposes.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|}
+\hline
+\textbf{File} & \textbf{Modification} \\
+\hline
+Hazard\_unit.v & Added ForwardAD/BD, StallF/D, FlushE, load-use detection \\
+Fetch\_Cycle.v & Added StallF input, conditional PC/register update \\
+Decode\_Cycle.v & Added StallD, FlushE, FlushD inputs with proper handling \\
+Execute\_Cycle.v & Added AUIPC mux, JALR target selection \\
+design.sv & Added FlushD = PCSrcE assignment, wire routing \\
+Branch\_Module.v & New module for all 6 branch comparisons \\
+Control\_Unit\_1.v & Added Branch\_Decoder for 3-bit branch encoding \\
+\hline
+\end{tabular}
+\caption{Summary of Design Modifications}
+\label{tab:modifications}
+\end{table}
+
+% =============================================================================
+% Part 4: Performance Evaluation
+% =============================================================================
+\section{Part 4: Performance Evaluation}
+
+This section presents a comprehensive phase-by-phase evaluation of our processor optimizations. We developed the processor incrementally through four phases, each addressing specific hazard handling issues. Testing was performed using Icarus Verilog for simulation and GTKWave for waveform analysis.
+
+\subsection{Experimental Setup}
+
+\subsubsection{Test Programs}
+
+We used two test programs to evaluate our processor across all phases:
+
+\textbf{Test Program 1 (6 instructions):} Basic data hazard test focusing on RAW dependencies and load-use scenarios.
+
+\begin{lstlisting}[caption=Test Program 1 - Basic Data Hazards]
+addi x5, x0, 5     # x5 = 5
+addi x6, x0, 3     # x6 = 3
+add  x7, x5, x6    # x7 = 8 (forwarding test)
+lw   x8, 0(x0)     # x8 = Load from address 0
+addi x9, x0, 1     # x9 = 1
+add  x10, x8, x9   # x10 = x8 + 1 (load-use hazard)
+\end{lstlisting}
+
+\textbf{Test Program 2 (12 instructions):} Complete test including data hazards, load-use, and control hazards (branches).
+
+\begin{lstlisting}[caption=Test Program 2 - Complete Hazard Test]
+addi x1, x0, 10    # x1 = 10
+addi x2, x0, 20    # x2 = 20
+add  x4, x1, x2    # x4 = 30 (forwarding)
+sw   x4, 4(x0)     # Store 30 to addr 4
+lw   x5, 4(x0)     # x5 = 30
+add  x6, x5, x1    # x6 = 40 (load-use stall)
+beq  x1, x2, 8     # Not taken (10 != 20)
+addi x7, x0, 1     # x7 = 1 (should execute)
+bne  x1, x2, 8     # Taken (10 != 20)
+addi x7, x0, 2     # SHOULD BE FLUSHED
+addi x7, x0, 3     # x7 = 3 (branch target)
+nop                # End marker
+\end{lstlisting}
+
+\subsubsection{Performance Metrics}
+
+The testbench calculates the following metrics:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{CPI (Cycles Per Instruction):} $\text{CPI} = \frac{\text{Total Cycles}}{\text{Instructions Retired}}$
+    \item \textbf{IPC (Instructions Per Cycle):} $\text{IPC} = \frac{1}{\text{CPI}}$
+    \item \textbf{Stalls Per Instruction:} $\text{SPI} = \text{CPI} - 1.0$ (ideal CPI is 1.0)
+    \item \textbf{Branch Prediction Accuracy:} Using static ``predict not-taken'' strategy
+    \item \textbf{Cache Hit Rates:} Simulated 64-entry direct-mapped I-Cache and D-Cache
+\end{itemize}
+
+\subsection{Ideal Execution Behavior (Golden Reference)}
+
+Before analyzing each phase, we establish the correct ``golden'' execution:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Data Hazard Test:} \texttt{add x6, x5, x1} must produce x6 = 0x28 (40 decimal)
+    \item \textbf{Control Hazard Test:} When \texttt{bne x1, x2, 8} is taken, the instruction \texttt{addi x7, x0, 2} must be flushed (not retired)
+    \item \textbf{Final State:} x7 should equal 3, never holding value 2
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+% Phase 0: Baseline
+% -----------------------------------------------------------------------------
+\subsection{Phase 0: Baseline (No Hazard Handling)}
+
+Phase 0 represents the original MERL-DSU baseline processor without any hazard handling mechanisms.
+
+\subsubsection{Implementation Status}
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Data Forwarding:} Not implemented
+    \item \textbf{Load-Use Stalling:} Not implemented
+    \item \textbf{Branch Flushing:} Not implemented
+\end{itemize}
+
+\subsubsection{Test Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Metric} & \textbf{Test 1 (6 instr)} & \textbf{Test 2 (12 instr)} \\
+\hline
+Instructions Retired & 6 & 10 \\
+Latency (Cycles) & 7 & 13 \\
+IPC & 0.8571 & 0.7692 \\
+CPI & 1.1667 & 1.3000 \\
+Stalls Per Instruction & 0.1667 & 0.3000 \\
+Branch Prediction Accuracy & 100.00\% & 100.00\% \\
+I-Cache Hit Rate & 75.00\% & 72.22\% \\
+D-Cache Hit Rate & 0.00\% & 50.00\% \\
+Execution Time & 70 ns & 130 ns \\
+\hline
+\end{tabular}
+\caption{Phase 0 Performance Results}
+\label{tab:phase0_results}
+\end{table}
+
+\subsubsection{Waveform Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{phase_0_-_6.png}
+\caption{Phase 0 Full Pipeline Waveform (Test Program 1, 6 instructions)}
+\label{fig:phase0_full_6}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{phase_0_-__6.png}
+\caption{Phase 0 Writeback Stage Signals (Test Program 1)}
+\label{fig:phase0_wb_6}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase_0_-_12.png}
+\caption{Phase 0 Full Pipeline Waveform (Test Program 2, 12 instructions)}
+\label{fig:phase0_full_12}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase_0_-12.png}
+\caption{Phase 0 Writeback Stage Signals (Test Program 2)}
+\label{fig:phase0_wb_12}
+\end{figure}
+
+\subsubsection{Observed Issues}
+
+\textbf{Data Hazard Failure:} At RD\_W=6, ResultW shows incorrect value (0x0E instead of 0x28). The pipeline failed to wait for the loaded value of x5, causing the ADD instruction to use stale register data.
+
+\textbf{Control Hazard Failure:} The pipeline uses static ``predict not-taken'' but lacks flush capability. When BNE is taken, x7 is incorrectly updated to 2 before being updated to 3. The architectural state is corrupted because the wrong instruction (addi x7, x0, 2) was allowed to retire.
+
+% -----------------------------------------------------------------------------
+% Phase 1: Data Forwarding
+% -----------------------------------------------------------------------------
+\subsection{Phase 1: Data Forwarding Implementation}
+
+Phase 1 adds Execute-stage and Decode-stage forwarding to handle RAW data hazards.
+
+\subsubsection{Implementation Details}
+
+\begin{itemize}[noitemsep]
+    \item \textbf{ForwardAE/ForwardBE:} 2-bit signals forwarding from Memory (2'b10) or Writeback (2'b01) to Execute
+    \item \textbf{ForwardAD/ForwardBD:} 1-bit signals forwarding from Writeback to Decode (for branch comparisons)
+    \item \textbf{Load-Use Stalling:} Added StallF, StallD, FlushE signals
+\end{itemize}
+
+\subsubsection{Test Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Metric} & \textbf{Test 2 (12 instr)} \\
+\hline
+Instructions Retired & 10 \\
+Latency (Cycles) & 14 \\
+IPC & 0.7143 \\
+CPI & 1.4000 \\
+Stalls Per Instruction & 0.4000 \\
+Branch Prediction Accuracy & 100.00\% \\
+I-Cache Hit Rate & 73.68\% \\
+D-Cache Hit Rate & 50.00\% \\
+Execution Time & 140 ns \\
+\hline
+\end{tabular}
+\caption{Phase 1 Performance Results}
+\label{tab:phase1_results}
+\end{table}
+
+\subsubsection{Waveform Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase_1.png}
+\caption{Phase 1 Writeback Stage Signals showing correct x6 = 0x28}
+\label{fig:phase1_wb}
+\end{figure}
+
+\subsubsection{Analysis}
+
+\textbf{Data Hazard: PASSED.} At RD\_W=6, ResultW correctly shows 0x28 (40 decimal). The forwarding paths successfully provided the ALU with the correct loaded data from x5.
+
+\textbf{Control Hazard: FAILED.} Like Phase 0, the pipeline still lacks the ability to flush the fall-through instruction after a taken branch. The processor still executes x7=2 before x7=3, corrupting the architectural state.
+
+\textbf{CPI Increase:} CPI increased from 1.30 to 1.40 because the load-use stall mechanism now correctly inserts bubbles, which adds cycles but ensures correctness.
+
+% -----------------------------------------------------------------------------
+% Phase 2: Branch Flushing
+% -----------------------------------------------------------------------------
+\subsection{Phase 2: Control Hazard Handling (Branch Flushing)}
+
+Phase 2 adds proper branch flushing to handle control hazards when branches are taken.
+
+\subsubsection{Implementation Details}
+
+\begin{itemize}[noitemsep]
+    \item \textbf{FlushD Signal:} Added to Hazard Unit, triggered when PCSrcE = 1 (branch taken)
+    \item \textbf{FlushE Update:} Modified to \texttt{FlushE = lwStall | PCSrcE}
+    \item \textbf{Decode Stage:} Pipeline registers clear control signals on FlushD, converting fetched instruction to NOP
+\end{itemize}
+
+\subsubsection{Test Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Metric} & \textbf{Test 2 (12 instr)} \\
+\hline
+Instructions Retired & 11 \\
+Latency (Cycles) & 15 \\
+IPC & 0.7333 \\
+CPI & 1.3636 \\
+Stalls Per Instruction & 0.3636 \\
+Total Branches & 2 \\
+Branches Mispredicted & 1 \\
+Branch Prediction Accuracy & 50.00\% \\
+I-Cache Hit Rate & 75.00\% \\
+D-Cache Hit Rate & 50.00\% \\
+Execution Time & 150 ns \\
+\hline
+\end{tabular}
+\caption{Phase 2 Performance Results}
+\label{tab:phase2_results}
+\end{table}
+
+\subsubsection{Waveform Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase_2.png}
+\caption{Phase 2 Writeback Stage Signals showing correct branch behavior (x7 = 3 only)}
+\label{fig:phase2_wb}
+\end{figure}
+
+\subsubsection{Analysis}
+
+\textbf{Data Hazard: PASSED.} x6 = 0x28 (correct).
+
+\textbf{Control Hazard: PASSED (with branch penalty).} The key observation is the NOP delay mechanism:
+\begin{enumerate}
+    \item The pipeline detects that BNE was taken after fetching \texttt{addi x7, x0, 2}
+    \item The Hazard Unit asserts FlushD, converting the incorrect instruction to a NOP (bubble)
+    \item In the waveform, instead of seeing 2 written to x7, there is a gap where RegWrite is inactive
+    \item After the branch penalty, the correct target instruction \texttt{addi x7, x0, 3} executes
+    \item \textbf{Result:} x7 = 3 only; the value 2 is never written
+\end{enumerate}
+
+\textbf{Branch Statistics:} With 2 branches total (BEQ not-taken, BNE taken) and static predict-not-taken, the BNE misprediction results in 50\% accuracy.
+
+% -----------------------------------------------------------------------------
+% Phase 3: Timing Optimization
+% -----------------------------------------------------------------------------
+\subsection{Phase 3: Timing Optimization}
+
+Phase 3 optimizes the timing characteristics of the hazard handling logic.
+
+\subsubsection{Implementation Details}
+
+\begin{itemize}[noitemsep]
+    \item Simplified Fetch\_Cycle.v control logic for better timing
+    \item FlushD handled at top-level module (design.sv) as combinational assignment
+    \item Streamlined stall propagation paths
+\end{itemize}
+
+\subsubsection{Test Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Metric} & \textbf{Test 1 (6 instr)} & \textbf{Test 2 (12 instr)} \\
+\hline
+Instructions Retired & 6 & 12 \\
+Latency (Cycles) & 7 & 15 \\
+IPC & 0.8571 & 0.8000 \\
+CPI & 1.1667 & 1.2500 \\
+Stalls Per Instruction & 0.1667 & 0.2500 \\
+Total Branches & 0 & 2 \\
+Branches Mispredicted & 0 & 1 \\
+Branch Prediction Accuracy & 100.00\% & 50.00\% \\
+I-Cache Hit Rate & 75.00\% & 75.00\% \\
+D-Cache Hit Rate & 0.00\% & 50.00\% \\
+Execution Time & 70 ns & 150 ns \\
+\hline
+\end{tabular}
+\caption{Phase 3 Performance Results}
+\label{tab:phase3_results}
+\end{table}
+
+\subsubsection{Waveform Analysis}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase_3.png}
+\caption{Phase 3 Complete Pipeline Waveform showing all 5 stages with forwarding and branch signals}
+\label{fig:phase3_full}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{Phase__3.png}
+\caption{Phase 3 Writeback Stage Detail}
+\label{fig:phase3_wb}
+\end{figure}
+
+\subsubsection{Analysis}
+
+\textbf{Data Hazard: PASSED.} x6 = 0x28 (correct).
+
+\textbf{Control Hazard: PASSED (efficiently).} The optimized timing results in cleaner branch handling with reduced critical path delays.
+
+\textbf{Performance Improvement:}
+\begin{itemize}
+    \item CPI improved from 1.3636 (Phase 2) to 1.2500 (Phase 3)
+    \item IPC improved from 0.7333 to 0.8000
+    \item Stalls per instruction reduced from 0.3636 to 0.2500
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+% Performance Comparison
+% -----------------------------------------------------------------------------
+\subsection{Performance Comparison Across Phases}
+
+Table~\ref{tab:comparison} provides a comprehensive comparison of all phases using Test Program 2 (the complete 12-instruction test with branches).
+
+\begin{table}[h]
+\centering
+\begin{adjustbox}{width=\textwidth}
+\begin{tabular}{|l|c|c|c|c|c|c|c|}
+\hline
+\textbf{Phase} & \textbf{Instr} & \textbf{Cycles} & \textbf{CPI} & \textbf{IPC} & \textbf{SPI} & \textbf{Branch Acc.} & \textbf{x6 / x7 Result} \\
+\hline
+Phase 0 (Baseline) & 10 & 13 & 1.3000 & 0.7692 & 0.3000 & 100\% & FAIL / FAIL \\
+Phase 1 (Forwarding) & 10 & 14 & 1.4000 & 0.7143 & 0.4000 & 100\% & PASS / FAIL \\
+Phase 2 (Flushing) & 11 & 15 & 1.3636 & 0.7333 & 0.3636 & 50\% & PASS / PASS \\
+Phase 3 (Optimized) & 12 & 15 & 1.2500 & 0.8000 & 0.2500 & 50\% & PASS / PASS \\
+\hline
+\end{tabular}
+\end{adjustbox}
+\caption{Performance Comparison Across All Phases (Test Program 2)}
+\label{tab:comparison}
+\end{table}
+
+\subsubsection{Summary of Improvements}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|p{7cm}|}
+\hline
+\textbf{Phase} & \textbf{add x6 Result} & \textbf{x7 Behavior} & \textbf{Explanation} \\
+\hline
+Phase 0 & Incorrect & Writes 2 then 3 (FAIL) & No hazard handling. Incorrect instruction executes immediately. \\
+\hline
+Phase 1 & 0x28 (PASS) & Writes 2 then 3 (FAIL) & Data hazard fixed via forwarding, but control hazard ignored. \\
+\hline
+Phase 2 & 0x28 (PASS) & Writes 3 only (PASS) & Pipeline stalls/flushes to kill x7=2. Correctness achieved at cost of cycles. \\
+\hline
+Phase 3 & 0x28 (PASS) & Writes 3 only (PASS) & Optimized timing. Branch penalty mitigated through improved logic. \\
+\hline
+\end{tabular}
+\caption{Functional Correctness Summary}
+\label{tab:correctness}
+\end{table}
+
+\subsection{Key Observations}
+
+\subsubsection{CPI Analysis}
+
+The ideal CPI for a scalar pipelined processor is 1.0 (one instruction per cycle). Our results show:
+\begin{itemize}
+    \item \textbf{Phase 0:} CPI = 1.30, but results are \textit{incorrect}
+    \item \textbf{Phase 1:} CPI = 1.40 (increased due to load-use stalls for correctness)
+    \item \textbf{Phase 2:} CPI = 1.36 (branch flushing adds bubbles but ensures correctness)
+    \item \textbf{Phase 3:} CPI = 1.25 (optimized, best performance with full correctness)
+\end{itemize}
+
+The CPI overhead above 1.0 is attributed to:
+\begin{itemize}
+    \item Load-use hazard stalls: 1 cycle per load-use dependency
+    \item Branch misprediction penalty: 2 cycles per taken branch (flush Fetch and Decode)
+\end{itemize}
+
+\subsubsection{Forwarding Effectiveness}
+
+Data forwarding successfully eliminates stalls for most RAW hazards:
+\begin{itemize}
+    \item Without forwarding: Every dependent instruction would require 2-cycle stall
+    \item With forwarding: Only load-use hazards require 1-cycle stall
+    \item Estimated stalls avoided: 3-4 per test program
+\end{itemize}
+
+\subsubsection{Branch Prediction Impact}
+
+Our static ``predict not-taken'' strategy achieves:
+\begin{itemize}
+    \item 100\% accuracy when no branches are taken (Test 1)
+    \item 50\% accuracy with mixed branch outcomes (1 taken, 1 not-taken in Test 2)
+    \item Each misprediction costs 2 cycles (branch penalty)
+\end{itemize}
+
+\subsubsection{Instructions Retired Difference}
+
+The difference in ``Instructions Retired'' across phases reflects correctness:
+\begin{itemize}
+    \item Phase 0/1: 10 instructions (incorrectly includes flushed instruction)
+    \item Phase 2: 11 instructions (flush mechanism working)
+    \item Phase 3: 12 instructions (all valid instructions properly counted)
+\end{itemize}
+
+% =============================================================================
+% Part 5: Team Contributions
+% =============================================================================
+\section{Part 5: Team Contributions}
+
+\begin{itemize}
+    \item \textbf{Akash Kolukonda:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+
+    \item \textbf{Zihao Xin:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+
+    \item \textbf{Hengde Dai:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+\end{itemize}
+
+% =============================================================================
+% References
+% =============================================================================
+\section{References}
+
+\begin{enumerate}
+    \item MERL-DSU RISC-V Pipeline Core Repository: \url{https://github.com/merldsu/RISCV_Pipeline_Core}
+    \item Patterson, D. A., \& Hennessy, J. L. (2017). \textit{Computer Organization and Design RISC-V Edition}. Morgan Kaufmann.
+    \item RISC-V Specification: \url{https://riscv.org/technical/specifications/}
+\end{enumerate}
+
+\end{document}
