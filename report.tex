@@ -983,12 +983,12 @@ Table~\ref{tab:comparison} provides a comprehensive comparison of all phases usi
 \begin{adjustbox}{width=\textwidth}
 \begin{tabular}{|l|c|c|c|c|c|c|c|c|}
 \hline
-\textbf{Phase} & \textbf{Instr} & \textbf{Cycles} & \textbf{CPI} & \textbf{IPC} & \textbf{IPC $\Delta$} & \textbf{SPI} & \textbf{Branch Acc.} & \textbf{x6 / x7 Result} \\
+\textbf{Phase} & \textbf{Instr} & \textbf{Cycles} & \textbf{CPI} & \textbf{IPC} & \textbf{Rel. IPC} & \textbf{SPI} & \textbf{Branch Acc.} & \textbf{x6 / x7 Result} \\
 \hline
-Phase 0 (Baseline) & 10 & 13 & 1.3000 & 0.7692 & --- & 0.3000 & 100\% & FAIL / FAIL \\
-Phase 1 (Forwarding) & 10 & 14 & 1.4000 & 0.7143 & -7.14\% & 0.4000 & 100\% & PASS / FAIL \\
-Phase 2 (Flushing) & 11 & 15 & 1.3636 & 0.7333 & -4.67\% & 0.3636 & 50\% & PASS / PASS \\
-Phase 3 (Optimized) & 12 & 15 & 1.2500 & 0.8000 & +4.00\% & 0.2500 & 50\% & PASS / PASS \\
+Phase 0 (Baseline) & 10 & 13 & 1.3000 & 0.7692 & 100.00\% & 0.3000 & 100\% & FAIL / FAIL \\
+Phase 1 (Forwarding) & 10 & 14 & 1.4000 & 0.7143 & 92.86\% & 0.4000 & 100\% & PASS / FAIL \\
+Phase 2 (Flushing) & 11 & 15 & 1.3636 & 0.7333 & 95.33\% & 0.3636 & 50\% & PASS / PASS \\
+Phase 3 (Optimized) & 12 & 15 & 1.2500 & 0.8000 & 104.00\% & 0.2500 & 50\% & PASS / PASS \\
 \hline
 \end{tabular}
 \end{adjustbox}
