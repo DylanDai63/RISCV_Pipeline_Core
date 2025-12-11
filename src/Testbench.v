@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module RISCV_TB_Phase0;
+module RISCV_TB;
 
     reg clock;
     reg reset;
@@ -25,6 +25,7 @@ module RISCV_TB_Phase0;
     reg [31:0] d_tags [0:63]; reg d_v [0:63];
     integer idx;
 
+    // Clock Generation: 5ns high, 5ns low = 10ns period (100MHz)
     always #5 clock = ~clock; 
 
     initial begin
@@ -32,8 +33,8 @@ module RISCV_TB_Phase0;
         // Init Cache Arrays
         for(idx=0; idx<64; idx=idx+1) begin i_v[idx]=0; d_v[idx]=0; end
         
-        $dumpfile("riscv_phase0.vcd");
-        $dumpvars(0, RISCV_TB_Phase0);
+        $dumpfile("riscv.vcd");
+        $dumpvars(0, RISCV_TB);
         #20; reset = 0;
     end
 
@@ -82,25 +83,40 @@ module RISCV_TB_Phase0;
 
     task print_report;
         input integer cycles;
-        real cpi, ipc, spi, br_acc, i_rate, d_rate;
+        real cpi, ipc, spi, br_acc, i_rate, d_rate, exec_time;
+        integer branch_mispredict;
         begin
             cpi = cycles * 1.0 / total_instructions;
             ipc = 1.0 / cpi;
             spi = cpi - 1.0;
+            
+            // Calculate Execution Time (10ns period)
+            exec_time = cycles * 10.0;
+
+            // Calculate Mispredictions
+            branch_mispredict = total_branches - branch_correct;
+
             if (total_branches > 0) br_acc = branch_correct * 100.0 / total_branches; else br_acc = 100;
             if (i_acc > 0) i_rate = i_hits * 100.0 / i_acc; else i_rate = 0;
             if (d_acc > 0) d_rate = d_hits * 100.0 / d_acc; else d_rate = 0;
 
-            $display("\n=== PHASE 0 (ORIGINAL) REPORT ===");
+            	$display("\n==========================================================");
+          $display(" RISC-V PROCESSOR PERFORMANCE REPORT(PHASE 0 - BASELINE)       ");
+            	$display("==========================================================");
+            $display("Instructions Retired   : %0d", total_instructions);
             $display("Latency (Total Cycles) : %0d", cycles);
-            $display("Throughput (IPC)       : %0.2f instr/cycle", ipc);
-            $display("CPI                    : %0.2f cycles/instr", cpi);
-            $display("Stalls Per Instruction : %0.2f", spi);
-            $display("---------------------------------");
-            $display("Branch Pred Accuracy   : %0.2f%%", br_acc);
-            $display("I-Cache Hit Rate       : %0.2f%%", i_rate);
-            $display("D-Cache Hit Rate       : %0.2f%%", d_rate);
-            $display("=================================\n");
+           	$display("Throughput (IPC)       : %0.4f instr/cycle", ipc);
+            $display("CPI                    : %0.4f cycles/instr", cpi);
+            $display("Stalls Per Instruction : %0.4f", spi);
+          $display("----------------------------------------------------------");
+            $display("Total Branches         : %0d", total_branches);
+            $display("Branches Mispredicted  : %0d", branch_mispredict);
+            $display("Branch Pred Accuracy   : %0.4f%%", br_acc);
+            $display("----------------------------------------------------------");
+            $display("I-Cache Hit Rate       : %0.4f%%", i_rate);
+            $display("D-Cache Hit Rate       : %0.4f%%", d_rate);
+          	$display("Total Execution Time   : %0.4f ns", exec_time);
+            	$display("==========================================================");
         end
     endtask
 endmodule

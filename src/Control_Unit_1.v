@@ -7,15 +7,14 @@ module Control_Unit_1(
     output MemWrite,
     output [1:0] ResultSrc,
     output Jump,
-    output [2:0] Branch,   // 3-bit output to Decode Stage
-    output [2:0] ImmSrc,
+  	output Branch[2:0],
+    output [2:0] ImmSrc,   // Expanded to 3 bits for U/J types
     output [3:0] ALUControl,
-    output ALUSrcA,
-    output PCTargetSrc
+    output ALUSrcA,        // NEW: Selects PC for AUIPC
+    output PCTargetSrc     // NEW: Selects ALU Result for JALR target
 );
 
     wire [1:0] ALUOp;
-    wire isBranch; // 1-bit internal wire connecting Main_Decoder to Branch_Decoder
 
     Main_Decoder md (
         .Op(Op),
@@ -24,20 +23,19 @@ module Control_Unit_1(
         .ALUSrc(ALUSrc),
         .MemWrite(MemWrite),
         .ResultSrc(ResultSrc),
-        .Branch(isBranch), // Connects to the 1-bit wire
+        .Branch(), // Handled internally or output if needed
         .ALUOp(ALUOp),
         .Jump(Jump),
         .ALUSrcA(ALUSrcA),
         .PCTargetSrc(PCTargetSrc)
     );
 
-    // Decodes the specific 3-bit branch type (BEQ, BNE, etc.)
-    Branch_Decoder BranchOp(
-        .isBranch(isBranch), // Input: 1-bit from Main Decoder
-        .funct3(funct3), 
-        .Branch_D(Branch)    // Output: 3-bit to Top Level
+  	Branch_Decoder BranchOp(
+                .isBranch(isBranch), 
+                .funct3(funct3), 
+                .Branch_D(Branch)
     );
-
+  
     ALU_Decoder ad (
         .Op(Op),
         .funct3(funct3),
@@ -104,7 +102,7 @@ endmodule
 module Branch_Decoder (isBranch, funct3, Branch_D);
     input isBranch;
     input [2:0] funct3;
-    output [2:0] Branch_D;
+    output Branch_D;
 
     assign Branch_D = ((isBranch == 1'b1) & (funct3 == 3'b000)) ? 3'b001 :
                       ((isBranch == 1'b1) & (funct3 == 3'b001)) ? 3'b010 : 
