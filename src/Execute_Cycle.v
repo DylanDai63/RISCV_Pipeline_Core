@@ -1,8 +1,6 @@
 // `include "ALU.v"
 // `include "Mux_2_1_32.v"
 // `include "Mux_4_1_32.v"
-// `include "PC_Adder.v"
-// `include "Branch_Module.v"
 
 module Execute_Cycle(
     clock, reset, 
@@ -10,13 +8,12 @@ module Execute_Cycle(
     RD1_E, RD2_E, Imm_Ext_E, RD_E, PCE, PCPlus4E, 
     PCSrcE, PCTargetE, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, WriteDataM, ALU_ResultM, 
     ResultW, ForwardA_E, ForwardB_E,
-    // NEW INPUTS
     ALUSrcE_A, PCTargetSrcE
 );
 
     // Declaration I/Os
     input clock, reset, RegWriteE, ALUSrcE, MemWriteE, JumpE;
-    input ALUSrcE_A, PCTargetSrcE; // Control signals for AUIPC and JALR
+    input ALUSrcE_A, PCTargetSrcE; 
     input [2:0] BranchE;
     input [1:0] ResultSrcE;
     input [3:0] ALUControlE;
@@ -26,7 +23,8 @@ module Execute_Cycle(
     input [31:0] ResultW;
     input [1:0] ForwardA_E, ForwardB_E;
 
-    output PCSrcE, RegWriteM, MemWriteM;
+    // Outputs
+    output PCSrcE, RegWriteM, MemWriteM; // PCSrcE is kept for compatibility but effectively unused
     output [1:0] ResultSrcM;
     output [4:0] RD_M; 
     output [31:0] PCPlus4M, WriteDataM, ALU_ResultM;
@@ -35,10 +33,9 @@ module Execute_Cycle(
     // Declaration of Interim Wires
     wire [31:0] Src_A_Forwarded, Src_A, Src_B_Forwarded, Src_B;
     wire [31:0] ResultE;
-    wire [31:0] BranchTarget, JALR_Target;
-    wire ZeroE, isBranch;
+    wire ZeroE;
 
-    // Declaration of Register
+    // Declaration of Registers
     reg RegWriteE_r, MemWriteE_r;
     reg [1:0] ResultSrcE_r;
     reg [4:0] RD_E_r;
@@ -46,17 +43,17 @@ module Execute_Cycle(
 
     // --- MODULES ---
 
-    // 1. Forwarding Mux for Source A (Selects: Register, Writeback Result, or Memory Result)
+    // 1. Forwarding Mux for Source A
     Mux_4_1_32 srca_forward_mux (
         .Input0(RD1_E),
         .Input1(ResultW),
-      	.Input2(ALU_ResultM), // Critical: Using input from Top module
+        .Input2(ALU_ResultM), 
         .Input3(32'h00000000),
         .Selection(ForwardA_E),
         .Output(Src_A_Forwarded)
     );
 
-    // 2. NEW: AUIPC Mux (Selects: Forwarded Register A or PC)
+    // 2. AUIPC Mux
     Mux_2_1_32 auipc_mux (
         .Input0(Src_A_Forwarded),
         .Input1(PCE),
@@ -68,13 +65,13 @@ module Execute_Cycle(
     Mux_4_1_32 srcb_forward_mux (
         .Input0(RD2_E),
         .Input1(ResultW),
-      .Input2(ALU_ResultM), // Critical: Using input from Top module
+        .Input2(ALU_ResultM), 
         .Input3(32'h00000000),
         .Selection(ForwardB_E),
         .Output(Src_B_Forwarded)
     );
 
-    // 4. ALU Src Mux (Selects: Register B or Immediate)
+    // 4. ALU Src Mux
     Mux_2_1_32 alu_src_mux (
         .Input0(Src_B_Forwarded),
         .Input1(Imm_Ext_E),
@@ -82,17 +79,7 @@ module Execute_Cycle(
         .Output(Src_B)
     );
 
-    // 5. Branch Logic (Compares Forwarded Values)
-    Branch_Module is_Branch(
-        .A(Src_A_Forwarded), 
-        .B(Src_B_Forwarded), 
-        .A_Unsigned(Src_A_Forwarded), 
-        .B_Unsigned(Src_B_Forwarded), 
-        .BranchE(BranchE), 
-        .isBranch(isBranch) 
-    );
-
-    // 6. ALU Unit
+    // 5. ALU Unit
     ALU alu (
         .A(Src_A),
         .B(Src_B),
@@ -104,17 +91,17 @@ module Execute_Cycle(
         .Negative()
     );
 
-    // 7. PC Target Calculation
-    // Adder for Branches and JAL
-    PC_Adder branch_adder (
-        .PC(PCE),
-        .Amount(Imm_Ext_E),
-        .Incremented_PC(BranchTarget)
-    );
+    // --- REMOVED: Branch_Module (Moved to Decode) ---
+    // --- REMOVED: PC_Adder for Branch Target (Moved to Decode) ---
 
-    // Mux for JALR (Selects: PC+Imm or ALU Result)
-    assign JALR_Target = ResultE; // JALR uses the ALU result
-    assign PCTargetE = (PCTargetSrcE == 1'b1) ? JALR_Target : BranchTarget;
+    // JALR Target (Still calculated here as it uses ALU Result)
+    // But since Fetch listens to Decode, this output is largely informational 
+    // unless you implement specific JALR handling.
+    assign PCTargetE = ResultE; 
+
+    // PCSrcE is now 0 because the decision happens in Decode (PCSrcD)
+    // We keep the port to avoid breaking the Top Module instantiation.
+    assign PCSrcE = 1'b0; 
 
     // --- PIPELINE REGISTER LOGIC ---
     always @(posedge clock or posedge reset) begin
@@ -133,15 +120,12 @@ module Execute_Cycle(
             ResultSrcE_r <= ResultSrcE;
             RD_E_r <= RD_E;
             PCPlus4E_r <= PCPlus4E; 
-            RD2_E_r <= Src_B_Forwarded; // We latch the Forwarded B for Store instructions
+            RD2_E_r <= Src_B_Forwarded;
             ResultE_r <= ResultE;
         end
     end
 
     // Output Assignments
-    assign PCSrcE = JumpE | (BranchE != 3'b000 & isBranch == 1'b1);
-    
-    // Outputs come from the Registers (_r)
     assign RegWriteM = RegWriteE_r;
     assign MemWriteM = MemWriteE_r;
     assign ResultSrcM = ResultSrcE_r;
