@@ -8,7 +8,7 @@
 `include "Mux_2_1_32.v"
 `include "Mux_4_1_32.v"
 `include "Instruction_Memory.v"
-`include "Control_Unit_1.v"
+`include "Control_Unit_1.v" 
 `include "Register_File.v"
 `include "Sign_Extend.v"
 `include "ALU.v"
@@ -36,147 +36,145 @@ module RISC_V_PIPELINED_TOP(clock, reset);
     // --- NEW WIRES FOR JAL/JALR/AUIPC ---
     wire ALUSrcE_A, PCTargetSrcE; 
 
-    // --- NEW WIRES FOR HAZARD HANDLING (STALL/FLUSH) ---
+    // --- NEW WIRES FOR HAZARD HANDLING ---
     wire StallF, StallD, FlushE, FlushD;
-
-    // --- LOGIC FOR FLUSHING ---
-    // If a branch is taken (PCSrcE == 1), we flush the instruction in Decode
-    assign FlushD = PCSrcE;
 
     // Module Initiation
 
     // Fetch Stage
     Fetch_Cycle Fetch (
-                        .clock(clock), 
-                        .reset(reset), 
-                        .PCSrcE(PCSrcE), 
-                        .PCTargetE(PCTargetE), 
-                        .StallF(StallF), // NEW: Freeze PC during Load-Use Hazard
-                        .InstrD(InstrD), 
-                        .PCD(PCD), 
-                        .PCPlus4D(PCPlus4D)
-                    );
+        .clock(clock), 
+        .reset(reset), 
+        .PCSrcE(PCSrcE), 
+        .PCTargetE(PCTargetE), 
+        .StallF(StallF), // Correctly connected
+        .StallD(StallD), // Correctly connected
+        .FlushD(FlushD), // Correctly connected
+        .InstrD(InstrD), 
+        .PCD(PCD), 
+        .PCPlus4D(PCPlus4D)
+    );
 
     // Decode Stage
     Decode_Cycle Decode (
-                        .clock(clock), 
-                        .reset(reset), 
-                        .InstrD(InstrD), 
-                        .PCD(PCD), 
-                        .PCPlus4D(PCPlus4D), 
-                        .RegWriteW(RegWriteW), 
-                        .RDW(RDW), 
-                        .ResultW(ResultW), 
-                        .RegWriteE(RegWriteE), 
-                        .ALUSrcE(ALUSrcE), 
-                        .MemWriteE(MemWriteE), 
-                        .ResultSrcE(ResultSrcE),
-                        .JumpE(JumpE),  
-                        .BranchE(BranchE),  
-                        .ALUControlE(ALUControlE), 
-                        .RD1_E(RD1_E), 
-                        .RD2_E(RD2_E), 
-                        .Imm_Ext_E(Imm_Ext_E), 
-                        .RD_E(RD_E), 
-                        .PCE(PCE), 
-                        .PCPlus4E(PCPlus4E),
-                        .RS1_D(RS1_D),
-                        .RS2_D(RS2_D),
-                        .RS1_E(RS1_E),
-                        .RS2_E(RS2_E),
-                        .ForwardA_D(ForwardAD),
-                        .ForwardB_D(ForwardBD),
-                        .StallD(StallD),  // NEW: Freeze Decode Register
-                        .FlushE(FlushE),  // NEW: Insert Bubble into Execute
-                        .FlushD(FlushD),  // NEW: Flush Decode on Branch Taken
-                        .ALUSrcE_A(ALUSrcE_A),      
-                        .PCTargetSrcE(PCTargetSrcE) 
-                    );
+        .clock(clock), 
+        .reset(reset), 
+        .InstrD(InstrD), 
+        .PCD(PCD), 
+        .PCPlus4D(PCPlus4D), 
+        .RegWriteW(RegWriteW), 
+        .RDW(RDW), 
+        .ResultW(ResultW), 
+        .RegWriteE(RegWriteE), 
+        .ALUSrcE(ALUSrcE), 
+        .MemWriteE(MemWriteE), 
+        .ResultSrcE(ResultSrcE),
+        .JumpE(JumpE),  
+        .BranchE(BranchE),  
+        .ALUControlE(ALUControlE), 
+        .RD1_E(RD1_E), 
+        .RD2_E(RD2_E), 
+        .Imm_Ext_E(Imm_Ext_E), 
+        .RD_E(RD_E), 
+        .PCE(PCE), 
+        .PCPlus4E(PCPlus4E),
+        .RS1_D(RS1_D),
+        .RS2_D(RS2_D),
+        .RS1_E(RS1_E),
+        .RS2_E(RS2_E),
+        .ForwardA_D(ForwardAD),
+        .ForwardB_D(ForwardBD),
+        .FlushE(FlushE),       // Correct: Decode only needs FlushE
+        // REMOVED StallD/FlushD from here (they belong to Fetch)
+        .ALUSrcE_A(ALUSrcE_A),       
+        .PCTargetSrcE(PCTargetSrcE) 
+    );
 
     // Execute Stage
     Execute_Cycle Execute (
-                        .clock(clock), 
-                        .reset(reset), 
-                        .RegWriteE(RegWriteE), 
-                        .ALUSrcE(ALUSrcE), 
-                        .MemWriteE(MemWriteE), 
-                        .ResultSrcE(ResultSrcE), 
-                        .JumpE(JumpE), 
-                        .BranchE(BranchE), 
-                        .ALUControlE(ALUControlE), 
-                        .RD1_E(RD1_E), 
-                        .RD2_E(RD2_E), 
-                        .Imm_Ext_E(Imm_Ext_E), 
-                        .RD_E(RD_E), 
-                        .PCE(PCE), 
-                        .PCPlus4E(PCPlus4E), 
-                        .PCSrcE(PCSrcE), 
-                        .PCTargetE(PCTargetE), 
-                        .RegWriteM(RegWriteM), 
-                        .MemWriteM(MemWriteM), 
-                        .ResultSrcM(ResultSrcM), 
-                        .RD_M(RD_M), 
-                        .PCPlus4M(PCPlus4M), 
-                        .WriteDataM(WriteDataM), 
-                        .ALU_ResultM(ALU_ResultM),
-                        .ResultW(ResultW),
-                        .ForwardA_E(ForwardAE),
-                        .ForwardB_E(ForwardBE),
-                        .ALUSrcE_A(ALUSrcE_A),       
-                        .PCTargetSrcE(PCTargetSrcE) 
-                    );
+        .clock(clock), 
+        .reset(reset), 
+        .RegWriteE(RegWriteE), 
+        .ALUSrcE(ALUSrcE), 
+        .MemWriteE(MemWriteE), 
+        .ResultSrcE(ResultSrcE), 
+        .JumpE(JumpE), 
+        .BranchE(BranchE), 
+        .ALUControlE(ALUControlE), 
+        .RD1_E(RD1_E), 
+        .RD2_E(RD2_E), 
+        .Imm_Ext_E(Imm_Ext_E), 
+        .RD_E(RD_E), 
+        .PCE(PCE), 
+        .PCPlus4E(PCPlus4E), 
+        .PCSrcE(PCSrcE), 
+        .PCTargetE(PCTargetE), 
+        .RegWriteM(RegWriteM), 
+        .MemWriteM(MemWriteM), 
+        .ResultSrcM(ResultSrcM), 
+        .RD_M(RD_M), 
+        .PCPlus4M(PCPlus4M), 
+        .WriteDataM(WriteDataM), 
+        .ALU_ResultM(ALU_ResultM),
+        .ResultW(ResultW),
+        .ForwardA_E(ForwardAE),
+        .ForwardB_E(ForwardBE),
+        .ALUSrcE_A(ALUSrcE_A),        
+        .PCTargetSrcE(PCTargetSrcE) 
+    );
     
     // Memory Stage
     Memory_Cycle Memory (
-                        .clock(clock), 
-                        .reset(reset), 
-                        .RegWriteM(RegWriteM), 
-                        .MemWriteM(MemWriteM), 
-                        .ResultSrcM(ResultSrcM), 
-                        .RD_M(RD_M), 
-                        .PCPlus4M(PCPlus4M), 
-                        .WriteDataM(WriteDataM), 
-                        .ALU_ResultM(ALU_ResultM), 
-                        .RegWriteW(RegWriteW), 
-                        .ResultSrcW(ResultSrcW), 
-                        .RD_W(RDW), 
-                        .PCPlus4W(PCPlus4W), 
-                        .ALU_ResultW(ALU_ResultW), 
-                        .ReadDataW(ReadDataW)
-                    );
+        .clock(clock), 
+        .reset(reset), 
+        .RegWriteM(RegWriteM), 
+        .MemWriteM(MemWriteM), 
+        .ResultSrcM(ResultSrcM), 
+        .RD_M(RD_M), 
+        .PCPlus4M(PCPlus4M), 
+        .WriteDataM(WriteDataM), 
+        .ALU_ResultM(ALU_ResultM), 
+        .RegWriteW(RegWriteW), 
+        .ResultSrcW(ResultSrcW), 
+        .RD_W(RDW), 
+        .PCPlus4W(PCPlus4W), 
+        .ALU_ResultW(ALU_ResultW), 
+        .ReadDataW(ReadDataW)
+    );
 
     // Write Back Stage
     Writeback_Cycle WriteBack (
-                        .clock(clock), 
-                        .reset(reset), 
-                        .ResultSrcW(ResultSrcW), 
-                        .PCPlus4W(PCPlus4W), 
-                        .ALU_ResultW(ALU_ResultW), 
-                        .ReadDataW(ReadDataW), 
-                        .ResultW(ResultW)
-                    );
+        .clock(clock), 
+        .reset(reset), 
+        .ResultSrcW(ResultSrcW), 
+        .PCPlus4W(PCPlus4W), 
+        .ALU_ResultW(ALU_ResultW), 
+        .ReadDataW(ReadDataW), 
+        .ResultW(ResultW)
+    );
 
     // Hazard Unit
     Hazard_Unit Forwarding_block (
-                        .reset(reset), 
-                        .RegWriteM(RegWriteM), 
-                        .RegWriteW(RegWriteW), 
-                        .RD_M(RD_M), 
-                        .RD_W(RDW), 
-                        .Rs1_D(RS1_D), 
-                        .Rs2_D(RS2_D), 
-                        .Rs1_E(RS1_E), 
-                        .Rs2_E(RS2_E), 
-                        // NEW INPUTS FOR STALLING
-                        .ResultSrcE0(ResultSrcE[0]), // 1 if instruction in Execute is a Load
-                        .RD_E(RD_E),                 // Destination in Execute to check dependency
-                        // OUTPUTS
-                        .ForwardAE(ForwardAE),
-                        .ForwardBE(ForwardBE),
-                        .ForwardAD(ForwardAD), 
-                        .ForwardBD(ForwardBD),
-                        .StallF(StallF),  // NEW
-                        .StallD(StallD),  // NEW
-                        .FlushE(FlushE)   // NEW
-                    );
+        .reset(reset), 
+        .RegWriteM(RegWriteM), 
+        .RegWriteW(RegWriteW), 
+        .RD_M(RD_M), 
+        .RD_W(RDW), 
+        .Rs1_D(RS1_D), 
+        .Rs2_D(RS2_D), 
+        .Rs1_E(RS1_E), 
+        .Rs2_E(RS2_E), 
+        // HAZARD CONNECTIONS
+        .ResultSrcE0(ResultSrcE[0]), 
+        .RD_E(RD_E), 
+        .PCSrcE(PCSrcE),    // Added Missing Connection
+        .ForwardAE(ForwardAE),
+        .ForwardBE(ForwardBE),
+        .ForwardAD(ForwardAD), 
+        .ForwardBD(ForwardBD),
+        .StallF(StallF),   
+        .StallD(StallD),   
+        .FlushD(FlushD),    // Added Missing Connection
+        .FlushE(FlushE)    
+    );
 endmodule

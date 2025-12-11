@@ -47,7 +47,7 @@ module Memory_Cycle(clock, reset, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus
             RegWriteM_r <= RegWriteM; 
             ResultSrcM_r <= ResultSrcM;
             RD_M_r <= RD_M;
-            PCPlus4M_r <= PCPlus4M; 
+            PCPlus4M_r <= PCPlus4M;  
             ALU_ResultM_r <= ALU_ResultM; 
             ReadDataM_r <= ReadDataM;
         end

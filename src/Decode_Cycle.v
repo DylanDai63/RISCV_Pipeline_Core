@@ -1,26 +1,12 @@
-// --- Decode_Cycle.v ---
-
-// `include "Control_Unit_1.v"
-// `include "Register_File.v"
-// `include "Sign_Extend.v"
-// `include "Mux_2_1_32.v"
-
 module Decode_Cycle(
-    // Input Ports with CORRECT Bit Widths
     input clock, reset, 
-    input [31:0] InstrD, PCD, PCPlus4D, ResultW, // 32-bit data inputs
-    input RegWriteW,
-    input [4:0] RDW,                              // 5-bit register address
-    
-    // Forwarding Inputs
+    input [31:0] InstrD, PCD, PCPlus4D, 
+    input RegWriteW, 
+    input [4:0] RDW, 
+    input [31:0] ResultW, 
     input ForwardA_D, ForwardB_D,
+    input StallD, FlushE, FlushD, // Inputs for Stalling/Flushing
     
-    // NEW INPUTS for Hazard Handling
-    input StallD,
-    input FlushE, 
-    input FlushD, 
-    
-    // Outputs to Execute Stage (Sized correctly)
     output RegWriteE, ALUSrcE, MemWriteE, JumpE,
     output [2:0] BranchE,
     output [1:0] ResultSrcE,
@@ -28,13 +14,11 @@ module Decode_Cycle(
     output [31:0] RD1_E, RD2_E, Imm_Ext_E,
     output [4:0] RS1_E, RS2_E, RD_E,
     output [31:0] PCE, PCPlus4E,
-    
-    // Outputs for Hazard Unit (Register Addresses)
     output [4:0] RS1_D, RS2_D,
     output ALUSrcE_A, PCTargetSrcE
 );
 
-    // Internal Wires (Control Unit Outputs)
+    // Internal Wires for Control Unit and Muxes
     wire RegWriteD, ALUSrcD, MemWriteD, JumpD;
     wire [2:0] BranchD;
     wire [1:0] ResultSrcD;
@@ -42,8 +26,9 @@ module Decode_Cycle(
     wire [2:0] ImmSrcD;
     wire [31:0] RD1_D, RD2_D, Imm_Ext_D;
     wire ALUSrcA_D, PCTargetSrcD;
-    
-    // Registers for Pipelining (D -> E) - These are the variables the errors were about
+    wire [31:0] RD1_D_mux, RD2_D_mux;
+
+    // Pipeline Registers (Must be REG)
     reg RegWriteD_r, ALUSrcD_r, MemWriteD_r, JumpD_r;
     reg [2:0] BranchD_r;
     reg [1:0] ResultSrcD_r;
@@ -52,11 +37,8 @@ module Decode_Cycle(
     reg [4:0] RD_D_r, RS1_D_r, RS2_D_r;
     reg [31:0] PCD_r, PCPlus4D_r;
     reg ALUSrcA_D_r, PCTargetSrcD_r;
-    
-    // Forwarding Mux Wires
-    wire [31:0] RD1_D_mux, RD2_D_mux;
 
-    // --- Output Assignments (Connect Register Outputs to External Ports) ---
+    // Output Assignments
     assign RegWriteE = RegWriteD_r;
     assign ALUSrcE = ALUSrcD_r;
     assign MemWriteE = MemWriteD_r;
@@ -72,43 +54,56 @@ module Decode_Cycle(
     assign PCPlus4E = PCPlus4D_r;
     assign RS1_E = RS1_D_r;
     assign RS2_E = RS2_D_r;
-    
-    // Outputs for Hazard Unit
-    assign RS1_D = InstrD[19:15];
-    assign RS2_D = InstrD[24:20];
     assign ALUSrcE_A = ALUSrcA_D_r;
     assign PCTargetSrcE = PCTargetSrcD_r;
 
-
-    // --- Module Instantiations ---
+    assign RS1_D = InstrD[19:15];
+    assign RS2_D = InstrD[24:20];
 
     // Control Unit
     Control_Unit_1 control_unit (
-        .Op(InstrD[6:0]), .funct3(InstrD[14:12]), .funct7(InstrD[31:25]),
-        .RegWrite(RegWriteD), .ALUSrc(ALUSrcD), .MemWrite(MemWriteD),
-        .ResultSrc(ResultSrcD), .Jump(JumpD), .ImmSrc(ImmSrcD),
-        .ALUControl(ALUControlD), .ALUSrcA(ALUSrcA_D), .PCTargetSrc(PCTargetSrcD)
+        .Op(InstrD[6:0]),
+        .funct3(InstrD[14:12]),
+        .funct7(InstrD[31:25]),
+        .RegWrite(RegWriteD),
+        .ALUSrc(ALUSrcD),
+        .MemWrite(MemWriteD),
+        .ResultSrc(ResultSrcD),
+        .Jump(JumpD),
+        .Branch(BranchD),
+        .ImmSrc(ImmSrcD),
+        .ALUControl(ALUControlD),
+        .ALUSrcA(ALUSrcA_D),
+        .PCTargetSrc(PCTargetSrcD)
     );
 
     // Register File
     Register_File rf (
-        .clock(clock), .reset(reset), .WE3(RegWriteW), .A1(InstrD[19:15]),
-        .A2(InstrD[24:20]), .A3(RDW), .WD3(ResultW), .RD1(RD1_D), .RD2(RD2_D)
+        .clock(clock),
+        .reset(reset),
+        .WE3(RegWriteW),
+        .A1(InstrD[19:15]),
+        .A2(InstrD[24:20]),
+        .A3(RDW),
+        .WD3(ResultW),
+        .RD1(RD1_D),
+        .RD2(RD2_D)
     );
 
     // Sign Extension
     Sign_Extend extension (
-      .Input(InstrD[31:0]), .ImmSrc(ImmSrcD), .Output(Imm_Ext_D)
+        .Input(InstrD[31:0]),
+        .ImmSrc(ImmSrcD),
+        .Output(Imm_Ext_D)
     );
 
-    // Forwarding Muxes
+    // Forwarding Muxes in Decode Stage
     assign RD1_D_mux = (ForwardA_D == 1'b1) ? ResultW : RD1_D;
     assign RD2_D_mux = (ForwardB_D == 1'b1) ? ResultW : RD2_D;
 
-    // --- PIPELINE REGISTERS (Synchronous Block) ---
+    // Pipeline Registers Logic (with Stall/Flush)
     always @(posedge clock or posedge reset) begin
         if (reset == 1'b1) begin
-            // Reset all registers to 0
             RegWriteD_r <= 1'b0; ALUSrcD_r <= 1'b0; MemWriteD_r <= 1'b0;
             ResultSrcD_r <= 2'b00; BranchD_r <= 3'b000; JumpD_r <= 1'b0;
             ALUControlD_r <= 4'b0000;
@@ -117,34 +112,32 @@ module Decode_Cycle(
             RS1_D_r <= 5'h0; RS2_D_r <= 5'h0;
             ALUSrcA_D_r <= 1'b0; PCTargetSrcD_r <= 1'b0;
         end
-        
-        // NEW: FLUSH LOGIC (Bubble Insertion for Branch or Load Stall)
         else if (FlushE == 1'b1 || FlushD == 1'b1) begin
-            // Clear Control Signals (Bubble/NOP)
-            RegWriteD_r <= 1'b0; ALUSrcD_r <= 1'b0; MemWriteD_r <= 1'b0;
-            ResultSrcD_r <= 2'b00; BranchD_r <= 3'b000; JumpD_r <= 1'b0;
+            // Flush Logic: Clear Control Signals to 0 (NOP)
+            RegWriteD_r <= 1'b0;
+            ALUSrcD_r <= 1'b0;
+            MemWriteD_r <= 1'b0;
+            ResultSrcD_r <= 2'b00;
+            BranchD_r <= 3'b000;
+            JumpD_r <= 1'b0;
             ALUControlD_r <= 4'b0000;
             ALUSrcA_D_r <= 1'b0;
-            
-            // Note: Data signals (RD1_D_r, etc.) are often ignored during a flush
-            // but for completeness, we keep them cleared in reset only.
+            PCTargetSrcD_r <= 1'b0;
+            // Data registers can hold garbage or 0, doesn't matter for NOP
         end
-        
-        // NEW: STALL LOGIC (Hold values for Load-Use)
         else if (StallD == 1'b1) begin
-             // Hold previous values (do nothing)
+            // Stall Logic: Do not update registers (Hold value)
         end
-        
-        // NORMAL OPERATION
         else begin
+            // Normal Operation
             RegWriteD_r <= RegWriteD;
             ALUSrcD_r <= ALUSrcD;
             MemWriteD_r <= MemWriteD;
             ResultSrcD_r <= ResultSrcD;
-            BranchD_r <= 3'b000;
+            BranchD_r <= BranchD;
             JumpD_r <= JumpD;
             ALUControlD_r <= ALUControlD;
-            RD1_D_r <= RD1_D_mux;
+            RD1_D_r <= RD1_D_mux; 
             RD2_D_r <= RD2_D_mux;
             Imm_Ext_D_r <= Imm_Ext_D;
             RD_D_r <= InstrD[11:7];
