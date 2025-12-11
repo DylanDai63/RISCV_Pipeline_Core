@@ -180,18 +180,18 @@ Based on the critical baseline limitations identified, we planned the following 
 % =============================================================================
 \section{Part 3: Implementation Details}
 
-This section describes our phase-by-phase implementation to fix the baseline processor's hazard handling issues. Each phase builds upon the previous one, progressively adding functionality until full correctness is achieved.
+This section describes our phase-by-phase implementation to fix the baseline processor's hazard handling issues. Each phase builds upon the previous one, progressively adding functionality until full correctness is achieved. We follow an incremental development approach, validating each phase before proceeding to the next.
 
 % -----------------------------------------------------------------------------
 % Phase 0: Baseline Analysis
 % -----------------------------------------------------------------------------
 \subsection{Phase 0: Baseline Code Analysis}
 
-Before implementing any changes, we analyzed the baseline MERL-DSU processor to understand its limitations.
+Before implementing any changes, we conducted a thorough analysis of the baseline MERL-DSU processor to understand its architecture and identify specific limitations that needed to be addressed.
 
-\subsubsection{Original Hazard Unit}
+\subsubsection{Original Hazard Unit Structure}
 
-The baseline Hazard Unit had minimal functionality:
+The baseline Hazard Unit had minimal functionality, as shown below:
 
 \begin{lstlisting}[language=Verilog, caption=Phase 0 - Original Hazard Unit (Simplified)]
 module Hazard_Unit(
@@ -207,11 +207,17 @@ endmodule
 \end{lstlisting}
 
 \subsubsection{Identified Problems}
-\begin{itemize}[noitemsep]
-    \item Forwarding logic did not correctly generate control signals
-    \item No load-use hazard detection (ResultSrcE0, RD\_E inputs missing)
-    \item No stall signals (StallF, StallD) for pipeline freezing
-    \item No flush signals (FlushE, FlushD) for branch handling
+
+Our analysis revealed four critical issues that needed to be addressed:
+
+\begin{itemize}
+    \item \textbf{Incomplete Forwarding Logic:} While the port declarations for ForwardAE and ForwardBE existed, the internal logic to correctly detect hazards and generate appropriate selection signals was either missing or incorrect. This resulted in the ALU receiving stale data from the register file instead of forwarded values.
+
+    \item \textbf{Missing Load-Use Detection:} The Hazard Unit lacked inputs for ResultSrcE0 (to identify load instructions) and RD\_E (destination register in Execute stage). Without these, load-use hazards could not be detected.
+
+    \item \textbf{No Pipeline Stall Mechanism:} Outputs StallF and StallD were absent, meaning the pipeline could not be frozen when a load-use hazard was detected. The processor would continue fetching and decoding new instructions even when a stall was necessary.
+
+    \item \textbf{No Branch Flush Capability:} FlushE and FlushD signals were not implemented, preventing the processor from squashing incorrectly fetched instructions after a branch was taken.
 \end{itemize}
 
 % -----------------------------------------------------------------------------
@@ -219,17 +225,29 @@ endmodule
 % -----------------------------------------------------------------------------
 \subsection{Phase 1: Data Forwarding and Load-Use Stalling}
 
-Phase 1 focused on fixing data hazards through proper forwarding and load-use stall implementation.
+Phase 1 focused on resolving data hazards, which occur when an instruction depends on the result of a previous instruction that has not yet been written back to the register file. We implemented two complementary mechanisms: data forwarding (to avoid stalls when possible) and load-use stalling (when forwarding is insufficient).
 
-\subsubsection{Execute Stage Forwarding}
+\subsubsection{Understanding Data Hazards}
 
-We implemented complete forwarding logic with 2-bit selection signals:
+In a pipelined processor, data hazards arise from Read-After-Write (RAW) dependencies. Consider this code sequence:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 1 - Execute Stage Forwarding]
-// ForwardAE/ForwardBE: 2-bit selectors for 4-to-1 mux
-// 2'b00: Use register file output (no forwarding)
-// 2'b01: Forward from Writeback stage (ResultW)
-// 2'b10: Forward from Memory stage (ALU_ResultM) - PRIORITY
+\begin{lstlisting}
+add x4, x1, x2    # Writes to x4 in cycle N+4 (Writeback)
+add x6, x4, x5    # Needs x4 in cycle N+2 (Execute)
+\end{lstlisting}
+
+Without forwarding, the second ADD would read a stale value of x4 from the register file, producing incorrect results.
+
+\subsubsection{Execute Stage Forwarding Implementation}
+
+We implemented complete forwarding logic using 2-bit selection signals that control 4-to-1 multiplexers in the Execute stage:
+
+\begin{lstlisting}[language=Verilog, caption=Phase 1 - Execute Stage Forwarding Logic]
+// ForwardAE/ForwardBE: 2-bit selectors for 4-to-1 mux in Execute stage
+// Selection encoding:
+// 2'b00: Use register file output (no hazard or hazard resolved by WB)
+// 2'b01: Forward from Writeback stage (ResultW) - 2 cycles ahead
+// 2'b10: Forward from Memory stage (ALU_ResultM) - 1 cycle ahead (PRIORITY)
 
 assign ForwardAE = (reset) ? 2'b00 :
     ((RegWriteM) & (RD_M != 0) & (RD_M == Rs1_E)) ? 2'b10 :
@@ -240,13 +258,22 @@ assign ForwardBE = (reset) ? 2'b00 :
     ((RegWriteW) & (RD_W != 0) & (RD_W == Rs2_E)) ? 2'b01 : 2'b00;
 \end{lstlisting}
 
-Memory stage has priority over Writeback because it contains the more recent value.
+\textbf{Key Design Decisions:}
+\begin{itemize}
+    \item \textbf{Memory Stage Priority:} When both Memory and Writeback stages have the same destination register, we forward from Memory because it contains the more recent value.
+    \item \textbf{Zero Register Check:} We explicitly check \texttt{RD\_M != 0} and \texttt{RD\_W != 0} because RISC-V's x0 register is hardwired to zero and should never trigger forwarding.
+    \item \textbf{RegWrite Check:} We only forward when the source instruction actually writes to a register (RegWriteM/RegWriteW = 1).
+\end{itemize}
 
 \subsubsection{Decode Stage Forwarding}
 
-ForwardAD and ForwardBD (1-bit signals) forward Writeback result to Decode for branch comparisons:
+For branch instructions that compare register values in the Decode stage, we need an additional forwarding path from Writeback to Decode:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 1 - Decode Stage Forwarding]
+\begin{lstlisting}[language=Verilog, caption=Phase 1 - Decode Stage Forwarding for Branches]
+// ForwardAD/ForwardBD: 1-bit signals for 2-to-1 mux in Decode stage
+// Used primarily for branch comparison when source register is being
+// written in the same cycle by an instruction in Writeback stage
+
 assign ForwardAD = (reset) ? 1'b0 :
     ((RegWriteW) & (RD_W != 0) & (RD_W == Rs1_D)) ? 1'b1 : 1'b0;
 
@@ -254,46 +281,74 @@ assign ForwardBD = (reset) ? 1'b0 :
     ((RegWriteW) & (RD_W != 0) & (RD_W == Rs2_D)) ? 1'b1 : 1'b0;
 \end{lstlisting}
 
+This forwarding path ensures that branch decisions use the most up-to-date register values, preventing incorrect branch outcomes.
+
 \subsubsection{Load-Use Hazard Detection}
 
-The lwStall signal detects when a load's destination matches a source in Decode:
+Forwarding cannot resolve all data hazards. When a load instruction is followed immediately by an instruction that uses the loaded value, a one-cycle stall is unavoidable because the data is not available until the Memory stage completes:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 1 - Load-Use Hazard Detection]
-// NEW INPUTS: ResultSrcE0 (1 if Load), RD_E (destination register)
-wire lwStall;
-assign lwStall = (ResultSrcE0 == 1'b1) & (RD_E != 0) &
-                 ((RD_E == Rs1_D) | (RD_E == Rs2_D));
-
-// Stall and Flush Signals
-assign StallF = lwStall;  // Freeze PC
-assign StallD = lwStall;  // Freeze Decode
-assign FlushE = lwStall;  // Insert bubble into Execute
+\begin{lstlisting}
+lw   x5, 0(x0)    # Data available at end of Memory stage
+add  x6, x5, x1   # Needs x5 at beginning of Execute stage - TOO EARLY!
 \end{lstlisting}
 
-\subsubsection{Fetch Stage Stall Logic}
+We implemented load-use hazard detection as follows:
 
-The Fetch stage implements stalling by conditionally updating PC:
+\begin{lstlisting}[language=Verilog, caption=Phase 1 - Load-Use Hazard Detection and Stalling]
+// NEW INPUTS required for load-use detection:
+// - ResultSrcE0: LSB of ResultSrc, equals 1 when instruction is a Load
+// - RD_E: Destination register of instruction in Execute stage
 
-\begin{lstlisting}[language=Verilog, caption=Phase 1 - Fetch Stage Stall Implementation]
-// Stall Logic: Keep old PC if stalled
+wire lwStall;
+assign lwStall = (ResultSrcE0 == 1'b1) &  // Instruction in EX is a Load
+                 (RD_E != 5'b0) &          // Destination is not x0
+                 ((RD_E == Rs1_D) | (RD_E == Rs2_D)); // Dependency exists
+
+// Stall and Flush Signals
+assign StallF = lwStall;  // Freeze Fetch stage (hold PC)
+assign StallD = lwStall;  // Freeze Decode stage (hold instruction)
+assign FlushE = lwStall;  // Insert bubble (NOP) into Execute stage
+\end{lstlisting}
+
+\textbf{Stall Mechanism Explanation:}
+\begin{enumerate}
+    \item \textbf{StallF = 1:} The Program Counter retains its current value, preventing a new instruction from being fetched.
+    \item \textbf{StallD = 1:} The Decode stage pipeline registers hold their current values, keeping the dependent instruction in place.
+    \item \textbf{FlushE = 1:} The Execute stage control signals are cleared to zero, effectively inserting a NOP (bubble) into the pipeline.
+\end{enumerate}
+
+\subsubsection{Fetch Stage Stall Implementation}
+
+The Fetch stage must respond to the StallF signal by holding both the PC and the pipeline registers:
+
+\begin{lstlisting}[language=Verilog, caption=Phase 1 - Fetch Stage Stall Logic]
+// PC Selection: Use current PC if stalled, otherwise use computed next PC
 assign PC_Next_Final = (StallF == 1'b1) ? PCF : PC_F;
 
-// Pipeline registers only update when not stalled
+// Pipeline registers (Fetch -> Decode) with stall support
 always @(posedge clock or posedge reset) begin
     if (reset) begin
-        Inst_Fetch_reg <= 32'h0;
+        Inst_Fetch_reg <= 32'h00000000;
+        PCF_reg <= 32'h00000000;
+        PCPlus4F_reg <= 32'h00000000;
     end
     else if (StallF == 1'b0) begin
-        Inst_Fetch_reg <= inst_fetched;  // Only update if NOT stalled
+        // Normal operation: latch new values
+        Inst_Fetch_reg <= inst_fetched;
+        PCF_reg <= PCF;
+        PCPlus4F_reg <= PCPlus4F;
     end
-    // If StallF is 1, registers retain values (implicit)
+    // If StallF == 1, registers implicitly retain their previous values
 end
 \end{lstlisting}
 
-\subsubsection{Phase 1 Result}
-\begin{itemize}[noitemsep]
-    \item \textbf{Data Hazard:} FIXED - x6 now correctly equals 0x28
-    \item \textbf{Control Hazard:} Still broken - x7 still writes 2 then 3
+\subsubsection{Phase 1 Verification Results}
+
+After implementing Phase 1, we verified the processor using our test programs:
+
+\begin{itemize}
+    \item \textbf{Data Hazard Test:} PASSED - The instruction \texttt{add x6, x5, x1} now correctly produces x6 = 0x28 (40 decimal). Forwarding successfully provides the ALU with the correct operand values.
+    \item \textbf{Control Hazard Test:} FAILED - The branch instruction \texttt{bne x1, x2, 8} is taken, but x7 still incorrectly receives value 2 before value 3. The pipeline continues to execute the instruction following the branch.
 \end{itemize}
 
 % -----------------------------------------------------------------------------
@@ -301,95 +356,145 @@ end
 % -----------------------------------------------------------------------------
 \subsection{Phase 2: Control Hazard Handling (Branch Flushing)}
 
-Phase 2 added branch flushing to handle control hazards when branches are taken.
+Phase 2 addressed control hazards, which occur when the processor fetches instructions from the wrong path after a branch. In our design, branches are resolved in the Execute stage, meaning that by the time we know a branch is taken, two incorrect instructions have already entered the pipeline (in Fetch and Decode stages).
+
+\subsubsection{Understanding the Control Hazard Problem}
+
+Consider this code sequence when the BNE branch is taken:
+
+\begin{lstlisting}
+bne x1, x2, target    # Branch decided in Execute (cycle N)
+addi x7, x0, 2        # Already in Decode (cycle N) - WRONG PATH!
+...                   # Already in Fetch (cycle N) - WRONG PATH!
+target:
+addi x7, x0, 3        # Correct instruction
+\end{lstlisting}
+
+Without flushing, the \texttt{addi x7, x0, 2} instruction would execute and corrupt the architectural state.
 
 \subsubsection{FlushD Signal Generation}
 
-Branch flushing is triggered at the top level when PCSrcE indicates a taken branch:
+We implemented branch flushing by generating a FlushD signal whenever a branch is taken:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 2 - Branch Flush Logic in design.sv]
+\begin{lstlisting}[language=Verilog, caption=Phase 2 - Branch Flush Signal Generation]
 // Top-level module (design.sv)
+// FlushD is asserted when PCSrcE indicates a taken branch or jump
 wire FlushD;
-assign FlushD = PCSrcE; // Flush Decode when branch is taken
+assign FlushD = PCSrcE; // Simple combinational assignment
+
+// PCSrcE is generated in Execute stage:
+// PCSrcE = 1 when branch is taken OR when instruction is a jump
 \end{lstlisting}
 
-\subsubsection{Hazard Unit Update}
+\subsubsection{Hazard Unit Extension for Branch Flushing}
 
-The Hazard Unit was extended to include PCSrcE input and FlushD output:
+The Hazard Unit was extended to incorporate the branch taken signal:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 2 - Extended Hazard Unit]
+\begin{lstlisting}[language=Verilog, caption=Phase 2 - Hazard Unit with Branch Flush Support]
 module Hazard_Unit(
     // ... existing inputs ...
-    input PCSrcE,      // NEW: Branch taken signal
+    input PCSrcE,      // NEW: Branch/Jump taken signal from Execute stage
     // ... existing outputs ...
-    output FlushD,     // NEW: Flush Decode stage
-    output FlushE      // UPDATED: Now includes branch flush
+    output FlushD,     // NEW: Flush Decode stage pipeline registers
+    output FlushE      // UPDATED: Now flushes on branch OR load-use stall
 );
-    // FlushE now handles both load-use AND branch flush
+    // ... forwarding logic unchanged ...
+
+    // FlushD: Triggered only by taken branch/jump
     assign FlushD = PCSrcE;
+
+    // FlushE: Triggered by load-use stall OR taken branch
+    // Both cases require inserting a bubble into Execute stage
     assign FlushE = lwStall | PCSrcE;
 \end{lstlisting}
 
-\subsubsection{Decode Stage Flush Handling}
+\subsubsection{Decode Stage Pipeline Register Flush Logic}
 
-The Decode\_Cycle module clears control signals on flush:
+The Decode\_Cycle module was modified to clear all control signals when a flush is requested:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 2 - Decode Stage Flush Handling]
+\begin{lstlisting}[language=Verilog, caption=Phase 2 - Decode Stage Flush Implementation]
 always @(posedge clock or posedge reset) begin
     if (reset == 1'b1) begin
-        // Reset all registers to 0
-    end
-    else if (FlushE == 1'b1 || FlushD == 1'b1) begin
-        // Flush: Clear control signals (convert to NOP)
+        // Hardware reset: clear all registers
         RegWriteD_r <= 1'b0;
         MemWriteD_r <= 1'b0;
         BranchD_r <= 3'b000;
         JumpD_r <= 1'b0;
-        // ... other control signals cleared
+        ALUControlD_r <= 4'b0000;
+        // ... other registers cleared ...
+    end
+    else if (FlushE == 1'b1 || FlushD == 1'b1) begin
+        // Flush: Convert instruction to NOP by clearing control signals
+        // This prevents the flushed instruction from modifying state
+        RegWriteD_r <= 1'b0;    // No register write
+        MemWriteD_r <= 1'b0;    // No memory write
+        BranchD_r <= 3'b000;    // No branch
+        JumpD_r <= 1'b0;        // No jump
+        ALUControlD_r <= 4'b0000;
+        ALUSrcA_D_r <= 1'b0;
+        PCTargetSrcD_r <= 1'b0;
+        // Data registers can retain values - they won't be used
     end
     else if (StallD == 1'b1) begin
-        // Stall: Hold current values
+        // Stall: Hold all current values (implicit in Verilog)
     end
     else begin
-        // Normal operation: Latch new values
+        // Normal operation: Latch new decoded values
+        RegWriteD_r <= RegWriteD;
+        MemWriteD_r <= MemWriteD;
+        // ... other registers updated normally ...
     end
 end
 \end{lstlisting}
 
-\subsubsection{Branch Module}
+\subsubsection{Branch Comparison Module}
 
-A dedicated Branch Module handles all six RISC-V branch conditions:
+To support all six RISC-V branch types, we implemented a dedicated Branch Module:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 2 - Branch Comparison Module]
-module Branch_Module(A, B, A_Unsigned, B_Unsigned, BranchE, isBranch);
-    input [2:0] BranchE;
-    input signed [31:0] A, B;
-    input [31:0] A_Unsigned, B_Unsigned;
-    output isBranch;
+\begin{lstlisting}[language=Verilog, caption=Phase 2 - Complete Branch Comparison Module]
+module Branch_Module(
+    input [2:0] BranchE,           // Branch type encoding from Control Unit
+    input signed [31:0] A, B,      // Signed operands for BLT/BGE
+    input [31:0] A_Unsigned, B_Unsigned,  // Unsigned for BLTU/BGEU
+    output isBranch                // 1 if branch condition is satisfied
+);
+    // Branch type encoding (from Branch_Decoder):
+    // 3'b000: No branch
+    // 3'b001: BEQ  (Branch if Equal)
+    // 3'b010: BNE  (Branch if Not Equal)
+    // 3'b011: BLT  (Branch if Less Than, signed)
+    // 3'b100: BGE  (Branch if Greater or Equal, signed)
+    // 3'b101: BLTU (Branch if Less Than, unsigned)
+    // 3'b110: BGEU (Branch if Greater or Equal, unsigned)
 
     assign isBranch =
-        (BranchE == 3'b000) ? 1'b0 :           // No branch
-        (BranchE == 3'b001) ? (A == B) :       // BEQ
-        (BranchE == 3'b010) ? (A != B) :       // BNE
-        (BranchE == 3'b011) ? (A < B) :        // BLT (signed)
-        (BranchE == 3'b100) ? (A >= B) :       // BGE (signed)
-        (BranchE == 3'b101) ? (A_Unsigned < B_Unsigned) :  // BLTU
-        (BranchE == 3'b110) ? (A_Unsigned >= B_Unsigned) : // BGEU
+        (BranchE == 3'b000) ? 1'b0 :
+        (BranchE == 3'b001) ? (A == B) :
+        (BranchE == 3'b010) ? (A != B) :
+        (BranchE == 3'b011) ? (A < B) :           // Signed comparison
+        (BranchE == 3'b100) ? (A >= B) :          // Signed comparison
+        (BranchE == 3'b101) ? (A_Unsigned < B_Unsigned) :
+        (BranchE == 3'b110) ? (A_Unsigned >= B_Unsigned) :
         1'b0;
 endmodule
 \end{lstlisting}
 
-\subsubsection{PC Source Logic}
+\subsubsection{PC Source Selection Logic}
 
-\begin{lstlisting}[language=Verilog, caption=Phase 2 - PCSrc Generation]
-assign PCSrcE = JumpE | (BranchE != 3'b000 & isBranch == 1'b1);
+The final PC source decision combines jump and branch signals:
+
+\begin{lstlisting}[language=Verilog, caption=Phase 2 - PCSrc Generation in Execute Stage]
+// PCSrcE determines whether to take branch target or sequential PC+4
+// Asserted for: unconditional jumps (JAL, JALR) OR taken conditional branches
+assign PCSrcE = JumpE | ((BranchE != 3'b000) & (isBranch == 1'b1));
 \end{lstlisting}
 
-\subsubsection{Phase 2 Result}
-\begin{itemize}[noitemsep]
-    \item \textbf{Data Hazard:} PASSED - x6 = 0x28
-    \item \textbf{Control Hazard:} FIXED - x7 now writes only 3 (addi x7, 2 is flushed)
-    \item \textbf{Trade-off:} Branch penalty adds cycles but ensures correctness
+\subsubsection{Phase 2 Verification Results}
+
+\begin{itemize}
+    \item \textbf{Data Hazard Test:} PASSED - x6 = 0x28 (unchanged from Phase 1)
+    \item \textbf{Control Hazard Test:} PASSED - When \texttt{bne x1, x2, 8} is taken, the instruction \texttt{addi x7, x0, 2} is successfully flushed. Register x7 receives only value 3, never value 2.
+    \item \textbf{Performance Trade-off:} The branch flush mechanism introduces a 2-cycle penalty for every taken branch, as both Fetch and Decode stages must be flushed.
 \end{itemize}
 
 % -----------------------------------------------------------------------------
@@ -397,28 +502,54 @@ assign PCSrcE = JumpE | (BranchE != 3'b000 & isBranch == 1'b1);
 % -----------------------------------------------------------------------------
 \subsection{Phase 3: Timing Optimization}
 
-Phase 3 optimized the timing characteristics while maintaining correctness.
+Phase 3 focused on optimizing the implementation for better timing characteristics while maintaining functional correctness. The primary goals were to reduce critical path delays and simplify the control logic.
+
+\subsubsection{Optimization Strategy}
+
+Our optimization strategy involved:
+\begin{enumerate}
+    \item Moving FlushD generation to the top-level module as a simple combinational assignment
+    \item Simplifying the Fetch stage by removing redundant flush handling
+    \item Streamlining signal propagation paths to reduce combinational delays
+\end{enumerate}
 
 \subsubsection{Simplified Fetch Stage}
 
-The Fetch stage control logic was streamlined:
+The Fetch stage was streamlined by focusing only on the essential stall logic:
 
 \begin{lstlisting}[language=Verilog, caption=Phase 3 - Optimized Fetch Stage]
 module Fetch_Cycle(
-    input clock, reset, PCSrcE,
+    input clock, reset,
+    input PCSrcE,
     input [31:0] PCTargetE,
-    input StallF,  // Only StallF needed (FlushD handled elsewhere)
+    input StallF,  // Only stall input needed; flush handled elsewhere
     output [31:0] InstrD, PCD, PCPlus4D
 );
-    // Simplified stall logic
+    wire [31:0] PC_F, PCF, PCPlus4F, inst_fetched;
+    wire [31:0] PC_Next_Final;
+
+    // PC Mux: Select between sequential (PC+4) and branch target
+    Mux_2_1_32 PC_MUX(
+        .Input0(PCPlus4F),
+        .Input1(PCTargetE),
+        .Selection(PCSrcE),
+        .Output(PC_F)
+    );
+
+    // Stall Logic: Simplified - just hold PC on stall
     assign PC_Next_Final = (StallF == 1'b1) ? PCF : PC_F;
 
+    // Pipeline registers with minimal control
     always @(posedge clock or posedge reset) begin
         if (reset) begin
-            Inst_Fetch_reg <= 32'h0;
+            Inst_Fetch_reg <= 32'h00000000;
+            PCF_reg <= 32'h00000000;
+            PCPlus4F_reg <= 32'h00000000;
         end
         else if (StallF == 1'b0) begin
             Inst_Fetch_reg <= inst_fetched;
+            PCF_reg <= PCF;
+            PCPlus4F_reg <= PCPlus4F;
         end
     end
 endmodule
@@ -426,46 +557,62 @@ endmodule
 
 \subsubsection{Top-Level FlushD Assignment}
 
-FlushD is now a simple combinational assignment at the top level (design.sv):
+FlushD is generated as a clean combinational signal at the top level:
 
-\begin{lstlisting}[language=Verilog, caption=Phase 3 - Top-Level FlushD]
-// design.sv - Clean combinational flush
+\begin{lstlisting}[language=Verilog, caption=Phase 3 - Clean Top-Level FlushD Generation]
+// design.sv - Top-level module
+// FlushD as simple wire reduces propagation delay
 wire FlushD;
-assign FlushD = PCSrcE;
+assign FlushD = PCSrcE;  // Direct assignment, minimal logic depth
 \end{lstlisting}
 
-\subsubsection{Final Hazard Unit}
+\subsubsection{Final Optimized Hazard Unit}
 
-The optimized Hazard Unit focuses on forwarding and load-use stalling:
+The Hazard Unit focuses on its core responsibilities without FlushD generation:
 
 \begin{lstlisting}[language=Verilog, caption=Phase 3 - Final Optimized Hazard Unit]
 module Hazard_Unit(
     input reset,
     input RegWriteM, RegWriteW,
     input [4:0] RD_M, RD_W, Rs1_D, Rs2_D, Rs1_E, Rs2_E,
-    input ResultSrcE0, input [4:0] RD_E,
+    input ResultSrcE0,
+    input [4:0] RD_E,
     output [1:0] ForwardAE, ForwardBE,
     output ForwardAD, ForwardBD,
     output StallF, StallD, FlushE
 );
-    // Forwarding logic (unchanged from Phase 1)
-    // ...
+    // Execute Stage Forwarding (unchanged)
+    assign ForwardAE = (reset == 1'b1) ? 2'b00 :
+        ((RegWriteM == 1'b1) & (RD_M != 5'b0) & (RD_M == Rs1_E)) ? 2'b10 :
+        ((RegWriteW == 1'b1) & (RD_W != 5'b0) & (RD_W == Rs1_E)) ? 2'b01 : 2'b00;
 
-    // Load-use stall (FlushD handled at top level)
+    assign ForwardBE = (reset == 1'b1) ? 2'b00 :
+        ((RegWriteM == 1'b1) & (RD_M != 5'b0) & (RD_M == Rs2_E)) ? 2'b10 :
+        ((RegWriteW == 1'b1) & (RD_W != 5'b0) & (RD_W == Rs2_E)) ? 2'b01 : 2'b00;
+
+    // Decode Stage Forwarding (unchanged)
+    assign ForwardAD = (reset == 1'b1) ? 1'b0 :
+        ((RegWriteW == 1'b1) & (RD_W != 5'b0) & (RD_W == Rs1_D)) ? 1'b1 : 1'b0;
+    assign ForwardBD = (reset == 1'b1) ? 1'b0 :
+        ((RegWriteW == 1'b1) & (RD_W != 5'b0) & (RD_W == Rs2_D)) ? 1'b1 : 1'b0;
+
+    // Load-Use Hazard Detection (FlushD handled at top level)
     wire lwStall;
     assign lwStall = (ResultSrcE0 == 1'b1) & (RD_E != 5'b0) &
                      ((RD_E == Rs1_D) | (RD_E == Rs2_D));
+
     assign StallF = lwStall;
     assign StallD = lwStall;
-    assign FlushE = lwStall;
+    assign FlushE = lwStall;  // Only load-use stall triggers FlushE here
 endmodule
 \end{lstlisting}
 
-\subsubsection{Phase 3 Result}
-\begin{itemize}[noitemsep]
-    \item \textbf{Data Hazard:} PASSED - x6 = 0x28
-    \item \textbf{Control Hazard:} PASSED - x7 = 3 only
-    \item \textbf{Performance:} CPI improved from 1.36 to 1.25
+\subsubsection{Phase 3 Verification Results}
+
+\begin{itemize}
+    \item \textbf{Data Hazard Test:} PASSED - x6 = 0x28 (correct)
+    \item \textbf{Control Hazard Test:} PASSED - x7 = 3 only (correct)
+    \item \textbf{Performance Improvement:} CPI improved from 1.3636 (Phase 2) to 1.2500 (Phase 3), representing an 8.3\% improvement in instructions per cycle.
 \end{itemize}
 
 % -----------------------------------------------------------------------------
@@ -473,25 +620,25 @@ endmodule
 % -----------------------------------------------------------------------------
 \subsection{Summary of Modifications by Phase}
 
-Table~\ref{tab:modifications} summarizes the files modified in each phase.
+Table~\ref{tab:modifications} provides a comprehensive summary of all files modified during each phase of development.
 
 \begin{table}[h]
 \centering
-\begin{tabular}{|l|l|l|}
+\begin{tabular}{|l|l|p{8cm}|}
 \hline
 \textbf{Phase} & \textbf{File} & \textbf{Modification} \\
 \hline
-\multirow{3}{*}{Phase 1} & Hazard\_unit.v & Added ForwardAE/BE/AD/BD, StallF/D, FlushE \\
- & Fetch\_Cycle.v & Added StallF input, conditional PC update \\
- & Decode\_Cycle.v & Added StallD input, forwarding muxes \\
+\multirow{3}{*}{Phase 1} & Hazard\_unit.v & Added complete forwarding logic (ForwardAE/BE/AD/BD), load-use detection, and stall/flush signals (StallF/D, FlushE) \\
+ & Fetch\_Cycle.v & Added StallF input port and conditional PC/register update logic \\
+ & Decode\_Cycle.v & Added StallD input and forwarding multiplexers for branch operands \\
 \hline
-\multirow{4}{*}{Phase 2} & Hazard\_unit.v & Added PCSrcE input, FlushD output \\
- & Decode\_Cycle.v & Added FlushD handling for NOP insertion \\
- & design.sv & Added FlushD = PCSrcE wire routing \\
- & Branch\_Module.v & New module for 6 branch comparisons \\
+\multirow{4}{*}{Phase 2} & Hazard\_unit.v & Added PCSrcE input and FlushD output for branch flushing \\
+ & Decode\_Cycle.v & Added FlushD handling to convert flushed instructions to NOPs \\
+ & design.sv & Added FlushD wire and PCSrcE-based flush logic \\
+ & Branch\_Module.v & New module implementing all 6 RISC-V branch comparisons \\
 \hline
-\multirow{2}{*}{Phase 3} & Fetch\_Cycle.v & Simplified control logic \\
- & Hazard\_unit.v & Streamlined stall propagation \\
+\multirow{2}{*}{Phase 3} & Fetch\_Cycle.v & Simplified control logic by removing redundant flush handling \\
+ & Hazard\_unit.v & Streamlined by moving FlushD generation to top level \\
 \hline
 \end{tabular}
 \caption{Summary of Design Modifications by Phase}
