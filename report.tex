@@ -1132,16 +1132,49 @@ The difference in ``Instructions Retired'' across phases reflects correctness:
 \end{itemize}
 
 % =============================================================================
-% Part 5: Team Contributions
+% Part 5: Summary
 % =============================================================================
-\section{Part 5: Team Contributions}
+\section{Part 5: Summary}
+
+This project successfully designed, implemented, and optimized a 5-stage pipelined RISC-V processor through an incremental four-phase development approach. Our contributions span both the baseline implementation and subsequent optimizations.
+
+\subsection{Phase 0: Baseline Implementation (Our Foundation)}
+
+Starting from the incomplete MERL-DSU open-source framework, we designed and implemented a fully functional baseline processor with the following key contributions:
 
 \begin{itemize}
-    \item \textbf{Akash Kolukonda:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+    \item \textbf{Complete Data Forwarding Logic:} Designed the Hazard Unit from scratch with ForwardAE/ForwardBE (2-bit) for Execute stage and ForwardAD/ForwardBD (1-bit) for Decode stage, eliminating most RAW hazard stalls.
+    \item \textbf{JALR/AUIPC Instruction Support:} Added ALUSrcA and PCTargetSrc control signals with corresponding Control Unit modifications to support indirect jumps and PC-relative addressing.
+    \item \textbf{Integrated Forwarding Datapath:} Modified Decode\_Cycle.v and Execute\_Cycle.v to add forwarding multiplexers and connect them to our Hazard Unit.
+\end{itemize}
 
-    \item \textbf{Zihao Xin:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+\subsection{Phase 1-3: Optimization Work}
 
-    \item \textbf{Hengde Dai:} \textbf{TODO: [\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_]}
+Building upon our Phase 0 baseline, we implemented three optimization phases:
+
+\begin{itemize}
+    \item \textbf{Phase 1 (Load-Use Stalling):} Added load-use hazard detection with StallF, StallD, and FlushE signals to handle cases where forwarding alone is insufficient. This fixed the x6 correctness issue.
+    \item \textbf{Phase 2 (Branch Flushing):} Implemented FlushD signal generation to squash wrong-path instructions after taken branches. This fixed the x7 correctness issue, achieving full functional correctness.
+    \item \textbf{Phase 3 (Timing Optimization):} Streamlined control logic by moving FlushD generation to the top-level module, reducing critical path delays and improving CPI from 1.36 to 1.25.
+\end{itemize}
+
+\subsection{Final Results}
+
+\begin{itemize}
+    \item \textbf{Functional Correctness:} All data hazards (RAW, load-use) and control hazards (branch flushing) are correctly handled.
+    \item \textbf{Performance:} Final CPI of 1.25 with IPC of 0.80, representing a 4\% improvement over our Phase 0 baseline.
+    \item \textbf{Instruction Support:} Full RV32I subset including R-type, I-type, Load/Store, all 6 branch types, JAL, JALR, LUI, and AUIPC.
+\end{itemize}
+
+% =============================================================================
+% Part 6: Team Contributions
+% =============================================================================
+\section{Part 6: Team Contributions}
+
+\begin{itemize}
+    \item \textbf{Akash Kolukonda:} Led the implementation and development of the codebase. Collaborated with team members on project coordination and integration.
+    \item \textbf{Zihao Xin:} Led the preparation and delivery of the presentation. Collaborated with team members on project coordination and integration.
+    \item \textbf{Hengde Dai:} Led the writing and organization of the project report. Collaborated with team members on project coordination and integration.
 \end{itemize}
 
 % =============================================================================
