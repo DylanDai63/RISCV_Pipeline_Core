@@ -46,7 +46,6 @@ This report presents the design, optimization, and evaluation of a 5-stage pipel
 % =============================================================================
 \section{Part 1: Baseline Processor Description}
 
-This project implements a pipelined RISC-V processor supporting the RV32I instruction set. We developed our baseline processor (Phase 0) by extending the MERL-DSU RISC-V Pipeline Core open-source framework with significant enhancements including complete data forwarding logic and extended instruction support.
 
 \subsection{Pipeline Structure}
 
@@ -824,28 +823,28 @@ Execution Time & 70 ns & 130 ns \\
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{phase_0_-_6.png}
+\includegraphics[width=0.95\textwidth]{phase 0 - 6.png}
 \caption{Phase 0 Full Pipeline Waveform (Test Program 1, 6 instructions)}
 \label{fig:phase0_full_6}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{phase_0_-__6.png}
+\includegraphics[width=0.95\textwidth]{phase 0 -  6.png}
 \caption{Phase 0 Writeback Stage Signals (Test Program 1)}
 \label{fig:phase0_wb_6}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase_0_-_12.png}
+\includegraphics[width=0.95\textwidth]{Phase 0 - 12.png}
 \caption{Phase 0 Full Pipeline Waveform (Test Program 2, 12 instructions)}
 \label{fig:phase0_full_12}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase_0_-12.png}
+\includegraphics[width=0.95\textwidth]{Phase 0 -12.png}
 \caption{Phase 0 Writeback Stage Signals (Test Program 2)}
 \label{fig:phase0_wb_12}
 \end{figure}
@@ -898,7 +897,7 @@ Execution Time & 140 ns \\
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase_1.png}
+\includegraphics[width=0.95\textwidth]{Phase 1.png}
 \caption{Phase 1 Writeback Stage Signals showing correct x6 = 0x28}
 \label{fig:phase1_wb}
 \end{figure}
@@ -955,7 +954,7 @@ Execution Time & 150 ns \\
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase_2.png}
+\includegraphics[width=0.95\textwidth]{Phase 2.png}
 \caption{Phase 2 Writeback Stage Signals showing correct branch behavior (x7 = 3 only)}
 \label{fig:phase2_wb}
 \end{figure}
@@ -1019,14 +1018,14 @@ Execution Time & 70 ns & 150 ns \\
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase_3.png}
+\includegraphics[width=0.95\textwidth]{Phase 3.png}
 \caption{Phase 3 Complete Pipeline Waveform showing all 5 stages with forwarding and branch signals}
 \label{fig:phase3_full}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.95\textwidth]{Phase__3.png}
+\includegraphics[width=0.95\textwidth]{Phase  3.png}
 \caption{Phase 3 Writeback Stage Detail}
 \label{fig:phase3_wb}
 \end{figure}
@@ -1138,7 +1137,7 @@ The difference in ``Instructions Retired'' across phases reflects correctness:
 % =============================================================================
 % Part 5: Summary
 % =============================================================================
-\section{Part 5: Summary}
+\section{Part 5: Conclusion}
 
 This project successfully designed, implemented, and optimized a 5-stage pipelined RISC-V processor through an incremental four-phase development approach. Our contributions span both the baseline implementation and subsequent optimizations.
 
