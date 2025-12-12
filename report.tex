@@ -845,7 +845,7 @@ endmodule
 
 \textbf{1. Clock Generation and Reset Sequence}
 
-The testbench generates a 100MHz clock (10ns period) using a simple toggle mechanism. The reset sequence holds reset high for 20ns (2 clock cycles) to ensure proper initialization of all pipeline registers before execution begins.
+The testbench generates a 100MHz clock (10ns period) using a simple toggle mechanism (\texttt{always \#5 clock = \~{}clock}). The reset sequence holds reset high for 20ns (2 clock cycles) to ensure proper initialization of all pipeline registers before execution begins.
 
 \textbf{2. Auto-Stop Detection}
 
@@ -855,25 +855,92 @@ Rather than running for a fixed number of cycles, our testbench intelligently de
 
 Instructions are counted when they reach the Execute stage with valid control signals. This methodology counts instructions that will modify architectural state (register writes, memory operations, branches, or jumps), providing an accurate measure of ``instructions retired.''
 
-\textbf{4. Branch Prediction Modeling}
+\textbf{4. Branch Prediction Calculation}
 
-The testbench implements a static ``predict not-taken'' branch prediction model. For each branch instruction, it compares the actual outcome (PCSrcE) against the prediction:
+\textbf{Strategy:} Static Prediction (Always Predict ``Not Taken'')
+
+The testbench assumes a simple static predictor that always guesses a branch will not be taken (i.e., the code will continue sequentially).
+
+\begin{lstlisting}[language=Verilog, caption=Branch Prediction Logic]
+if (uut.Execute.BranchE != 0) begin
+    total_branches = total_branches + 1;
+    // Static Prediction: Predict Not Taken.
+    // If PCSrcE == 0, the branch was NOT taken.
+    // Since we predicted "Not Taken", this is a CORRECT prediction.
+    if (uut.Execute.PCSrcE == 0) branch_correct = branch_correct + 1;
+end
+\end{lstlisting}
+
 \begin{itemize}
-    \item If PCSrcE = 0 (branch not taken), prediction was correct
-    \item If PCSrcE = 1 (branch taken), prediction was incorrect (misprediction)
+    \item \textbf{Trigger:} Monitors the Execute Stage. If \texttt{BranchE != 0}, a branch instruction is being processed.
+    \item \textbf{PCSrcE Signal:} Determines the next Program Counter:
+    \begin{itemize}
+        \item \texttt{PCSrcE = 0}: Branch Not Taken (Next PC = Current PC + 4)
+        \item \texttt{PCSrcE = 1}: Branch Taken (Next PC = Branch Target)
+    \end{itemize}
+    \item \textbf{Calculation:} Since we always predict ``Not Taken'', if \texttt{PCSrcE = 0}, our prediction was correct; if \texttt{PCSrcE = 1}, we mispredicted.
 \end{itemize}
 
-\textbf{5. Cache Simulation}
+\textbf{5. Cache Hit Calculation}
 
-To provide realistic performance metrics, we simulate 64-entry direct-mapped caches for both instructions and data:
+\textbf{Architecture:} 64-Entry Direct-Mapped Cache
+
+The testbench simulates two separate caches (Instruction and Data) using Verilog arrays to store Tags and Valid bits.
+
+\textbf{Address Breakdown:} To check for a cache hit, the 32-bit address is split into three parts:
 \begin{itemize}
-    \item \textbf{I-Cache:} Indexed by PCF[9:4], tagged by PCF[31:10]. Accessed every cycle.
-    \item \textbf{D-Cache:} Indexed by ALU\_ResultM[9:4], tagged by ALU\_ResultM[31:10]. Accessed only on load/store operations.
+    \item \textbf{Tag:} Bits [31:10] --- Identifies the specific block of memory
+    \item \textbf{Index:} Bits [9:4] --- Selects one of the 64 cache lines
+    \item \textbf{Offset:} Bits [3:0] --- Ignored (we check for line presence only)
 \end{itemize}
 
-\textbf{6. Performance Report Generation}
+\textbf{Instruction Cache (I-Cache):} Accessed every cycle using the Fetch Stage Program Counter (\texttt{uut.Fetch.PCF}).
 
-At simulation end, the \texttt{print\_report} task calculates and displays comprehensive metrics including CPI, IPC, stalls per instruction, branch prediction accuracy, cache hit rates, and total execution time in nanoseconds.
+\begin{lstlisting}[language=Verilog, caption=I-Cache Simulation Logic]
+i_acc = i_acc + 1; // Increment Access Counter
+// Check if valid bit is SET AND Tag matches the current PC
+if (i_v[uut.Fetch.PCF[9:4]] &&
+    i_tags[uut.Fetch.PCF[9:4]] == uut.Fetch.PCF[31:10])
+    i_hits = i_hits + 1; // Cache Hit
+else begin
+    // Cache Miss: Update with new Tag and Valid bit
+    i_v[uut.Fetch.PCF[9:4]] = 1;
+    i_tags[uut.Fetch.PCF[9:4]] = uut.Fetch.PCF[31:10];
+end
+\end{lstlisting}
+
+\textbf{Data Cache (D-Cache):} Accessed only when a Load or Store occurs in the Memory Stage.
+
+\begin{lstlisting}[language=Verilog, caption=D-Cache Simulation Logic]
+// Trigger: Memory Write (Store) OR ResultSrcM=1 (Load)
+if (uut.MemWriteM || uut.ResultSrcM == 1) begin
+    d_acc = d_acc + 1;
+    // Check Index [9:4] and Tag [31:10] of ALU_ResultM (the address)
+    if (d_v[uut.ALU_ResultM[9:4]] &&
+        d_tags[uut.ALU_ResultM[9:4]] == uut.ALU_ResultM[31:10])
+        d_hits = d_hits + 1; // Cache Hit
+    else begin
+        // Cache Miss: Update on miss
+        d_v[uut.ALU_ResultM[9:4]] = 1;
+        d_tags[uut.ALU_ResultM[9:4]] = uut.ALU_ResultM[31:10];
+    end
+end
+\end{lstlisting}
+
+The D-Cache uses \texttt{ALU\_ResultM} as the address because in RISC-V, memory addresses are calculated by the ALU (e.g., \texttt{lw x5, 8(sp)} computes address as \texttt{sp + 8}).
+
+\textbf{6. Performance Metrics Calculation}
+
+In the \texttt{print\_report} task, raw counters are converted into final metrics:
+
+\begin{itemize}
+    \item \textbf{Branch Prediction Accuracy:} $\displaystyle \text{Accuracy} = \frac{\text{branch\_correct}}{\text{total\_branches}} \times 100\%$
+    \item \textbf{I-Cache Hit Rate:} $\displaystyle \text{I-Cache Rate} = \frac{\text{i\_hits}}{\text{i\_acc}} \times 100\%$
+    \item \textbf{D-Cache Hit Rate:} $\displaystyle \text{D-Cache Rate} = \frac{\text{d\_hits}}{\text{d\_acc}} \times 100\%$
+    \item \textbf{CPI:} $\displaystyle \text{CPI} = \frac{\text{total\_cycles}}{\text{total\_instructions}}$
+    \item \textbf{IPC:} $\displaystyle \text{IPC} = \frac{1}{\text{CPI}}$
+    \item \textbf{Execution Time:} $\text{Time} = \text{cycles} \times 10\text{ns}$ (at 100MHz)
+\end{itemize}
 
 % -----------------------------------------------------------------------------
 % Summary of Modifications
