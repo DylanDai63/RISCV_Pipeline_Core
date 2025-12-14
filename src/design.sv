@@ -36,13 +36,22 @@ module RISC_V_PIPELINED_TOP(clock, reset);
     // --- NEW WIRES FOR JAL/JALR/AUIPC ---
     wire ALUSrcE_A, PCTargetSrcE; 
 
+    // --- NEW WIRES FOR HAZARD HANDLING (STALL/FLUSH) ---
+    wire StallF, StallD, FlushE, FlushD;
+
+    // --- LOGIC FOR FLUSHING ---
+    // If a branch is taken (PCSrcE == 1), we flush the instruction in Decode
+    assign FlushD = PCSrcE;
+
     // Module Initiation
+
     // Fetch Stage
     Fetch_Cycle Fetch (
                         .clock(clock), 
                         .reset(reset), 
                         .PCSrcE(PCSrcE), 
                         .PCTargetE(PCTargetE), 
+                        .StallF(StallF), // NEW: Freeze PC during Load-Use Hazard
                         .InstrD(InstrD), 
                         .PCD(PCD), 
                         .PCPlus4D(PCPlus4D)
@@ -77,9 +86,11 @@ module RISC_V_PIPELINED_TOP(clock, reset);
                         .RS2_E(RS2_E),
                         .ForwardA_D(ForwardAD),
                         .ForwardB_D(ForwardBD),
-                        // --- NEW OUTPUT CONNECTIONS ---
-                        .ALUSrcE_A(ALUSrcE_A),      // Output from Decode
-                        .PCTargetSrcE(PCTargetSrcE) // Output from Decode
+                        .StallD(StallD),  // NEW: Freeze Decode Register
+                        .FlushE(FlushE),  // NEW: Insert Bubble into Execute
+                        .FlushD(FlushD),  // NEW: Flush Decode on Branch Taken
+                        .ALUSrcE_A(ALUSrcE_A),      
+                        .PCTargetSrcE(PCTargetSrcE) 
                     );
 
     // Execute Stage
@@ -111,9 +122,8 @@ module RISC_V_PIPELINED_TOP(clock, reset);
                         .ResultW(ResultW),
                         .ForwardA_E(ForwardAE),
                         .ForwardB_E(ForwardBE),
-                        // --- FIXED INPUT CONNECTIONS ---
-                        .ALUSrcE_A(ALUSrcE_A),       // Input to Execute
-                        .PCTargetSrcE(PCTargetSrcE) // Input to Execute
+                        .ALUSrcE_A(ALUSrcE_A),       
+                        .PCTargetSrcE(PCTargetSrcE) 
                     );
     
     // Memory Stage
@@ -149,19 +159,24 @@ module RISC_V_PIPELINED_TOP(clock, reset);
     // Hazard Unit
     Hazard_Unit Forwarding_block (
                         .reset(reset), 
-                        // FIXED: Check Hazard against instruction LEAVING the pipeline (W stage)
-                        // Using RegWriteW/RDW ensures we forward from the valid committed instruction
-                        .RegWriteM(RegWriteM), // Check against Execute-Memory Boundary
-                        .RegWriteW(RegWriteW), // Check against Memory-Writeback Boundary
+                        .RegWriteM(RegWriteM), 
+                        .RegWriteW(RegWriteW), 
                         .RD_M(RD_M), 
                         .RD_W(RDW), 
                         .Rs1_D(RS1_D), 
                         .Rs2_D(RS2_D), 
                         .Rs1_E(RS1_E), 
                         .Rs2_E(RS2_E), 
+                        // NEW INPUTS FOR STALLING
+                        .ResultSrcE0(ResultSrcE[0]), // 1 if instruction in Execute is a Load
+                        .RD_E(RD_E),                 // Destination in Execute to check dependency
+                        // OUTPUTS
                         .ForwardAE(ForwardAE),
                         .ForwardBE(ForwardBE),
                         .ForwardAD(ForwardAD), 
-                        .ForwardBD(ForwardBD)
-                        );
+                        .ForwardBD(ForwardBD),
+                        .StallF(StallF),  // NEW
+                        .StallD(StallD),  // NEW
+                        .FlushE(FlushE)   // NEW
+                    );
 endmodule

@@ -1,47 +1,34 @@
-// `include "Control_Unit_1.v"
-// `include "Register_File.v"
-// `include "Sign_Extend.v"
-// `include "Mux_2_1_32.v"
-
 module Decode_Cycle(
-    clock, reset, InstrD, PCD, PCPlus4D, RegWriteW, RDW, ResultW, 
-    RegWriteE, ALUSrcE, MemWriteE, ResultSrcE, JumpE, BranchE, ALUControlE, 
-    RD1_E, RD2_E, Imm_Ext_E, RD_E, PCE, PCPlus4E, RS1_D, RS2_D, RS1_E, RS2_E, 
-    ForwardA_D, ForwardB_D,
-    // NEW OUTPUTS for JALR/AUIPC
-    ALUSrcE_A, PCTargetSrcE
+    input clock, reset, 
+    input [31:0] InstrD, PCD, PCPlus4D, 
+    input RegWriteW, 
+    input [4:0] RDW, 
+    input [31:0] ResultW, 
+    input ForwardA_D, ForwardB_D,
+    input StallD, FlushE, FlushD, // Inputs for Stalling/Flushing
+    
+    output RegWriteE, ALUSrcE, MemWriteE, JumpE,
+    output [2:0] BranchE,
+    output [1:0] ResultSrcE,
+    output [3:0] ALUControlE,
+    output [31:0] RD1_E, RD2_E, Imm_Ext_E,
+    output [4:0] RS1_E, RS2_E, RD_E,
+    output [31:0] PCE, PCPlus4E,
+    output [4:0] RS1_D, RS2_D,
+    output ALUSrcE_A, PCTargetSrcE
 );
 
-    // Declaring I/O
-    input clock, reset, RegWriteW;
-    input [4:0] RDW;
-    input [31:0] InstrD, PCD, PCPlus4D, ResultW;
-    input ForwardA_D, ForwardB_D;
-
-    output RegWriteE, ALUSrcE, MemWriteE, JumpE;
-    output [2:0] BranchE;
-    output [1:0] ResultSrcE;
-    output [3:0] ALUControlE;
-    output [31:0] RD1_E, RD2_E, Imm_Ext_E;
-    output [4:0] RS1_E, RS2_E, RD_E;
-    output [31:0] PCE, PCPlus4E;
-    output [4:0] RS1_D, RS2_D;
-    
-    // NEW OUTPUTS DECLARATION
-    output ALUSrcE_A, PCTargetSrcE;
-
-    // Internal Wires
+    // Internal Wires for Control Unit and Muxes
     wire RegWriteD, ALUSrcD, MemWriteD, JumpD;
     wire [2:0] BranchD;
     wire [1:0] ResultSrcD;
     wire [3:0] ALUControlD;
     wire [2:0] ImmSrcD;
     wire [31:0] RD1_D, RD2_D, Imm_Ext_D;
-    
-    // NEW INTERNAL WIRES
     wire ALUSrcA_D, PCTargetSrcD;
+    wire [31:0] RD1_D_mux, RD2_D_mux;
 
-    // Registers for Pipelining (D -> E)
+    // Pipeline Registers (Must be REG)
     reg RegWriteD_r, ALUSrcD_r, MemWriteD_r, JumpD_r;
     reg [2:0] BranchD_r;
     reg [1:0] ResultSrcD_r;
@@ -49,14 +36,9 @@ module Decode_Cycle(
     reg [31:0] RD1_D_r, RD2_D_r, Imm_Ext_D_r;
     reg [4:0] RD_D_r, RS1_D_r, RS2_D_r;
     reg [31:0] PCD_r, PCPlus4D_r;
-    
-    // NEW PIPELINE REGISTERS
     reg ALUSrcA_D_r, PCTargetSrcD_r;
 
-    // Forwarding Mux Wires
-    wire [31:0] RD1_D_mux, RD2_D_mux;
-
-    // Assignments for Outputs
+    // Output Assignments
     assign RegWriteE = RegWriteD_r;
     assign ALUSrcE = ALUSrcD_r;
     assign MemWriteE = MemWriteD_r;
@@ -72,14 +54,11 @@ module Decode_Cycle(
     assign PCPlus4E = PCPlus4D_r;
     assign RS1_E = RS1_D_r;
     assign RS2_E = RS2_D_r;
-    assign RS1_D = InstrD[19:15];
-    assign RS2_D = InstrD[24:20];
-    
-    // NEW OUTPUT ASSIGNMENTS
     assign ALUSrcE_A = ALUSrcA_D_r;
     assign PCTargetSrcE = PCTargetSrcD_r;
 
-    // --- Modules Instantiation ---
+    assign RS1_D = InstrD[19:15];
+    assign RS2_D = InstrD[24:20];
 
     // Control Unit
     Control_Unit_1 control_unit (
@@ -91,10 +70,9 @@ module Decode_Cycle(
         .MemWrite(MemWriteD),
         .ResultSrc(ResultSrcD),
         .Jump(JumpD),
-        //.Branch(BranchD), // Note: Make sure your Control_Unit_1 has this port, or use Internal logic
+        .Branch(BranchD),
         .ImmSrc(ImmSrcD),
         .ALUControl(ALUControlD),
-        // NEW CONNECTIONS
         .ALUSrcA(ALUSrcA_D),
         .PCTargetSrc(PCTargetSrcD)
     );
@@ -114,18 +92,28 @@ module Decode_Cycle(
 
     // Sign Extension
     Sign_Extend extension (
-      .Input(InstrD[31:0]),
+        .Input(InstrD[31:0]),
         .ImmSrc(ImmSrcD),
         .Output(Imm_Ext_D)
     );
 
-    // Forwarding Muxes (Handling Data Hazards in Decode Stage)
+    // Forwarding Muxes in Decode Stage
     assign RD1_D_mux = (ForwardA_D == 1'b1) ? ResultW : RD1_D;
     assign RD2_D_mux = (ForwardB_D == 1'b1) ? ResultW : RD2_D;
 
-    // --- Pipeline Registers (Synchronous Block) ---
+    // Pipeline Registers Logic (with Stall/Flush)
     always @(posedge clock or posedge reset) begin
         if (reset == 1'b1) begin
+            RegWriteD_r <= 1'b0; ALUSrcD_r <= 1'b0; MemWriteD_r <= 1'b0;
+            ResultSrcD_r <= 2'b00; BranchD_r <= 3'b000; JumpD_r <= 1'b0;
+            ALUControlD_r <= 4'b0000;
+            RD1_D_r <= 32'h0; RD2_D_r <= 32'h0; Imm_Ext_D_r <= 32'h0;
+            RD_D_r <= 5'h0; PCD_r <= 32'h0; PCPlus4D_r <= 32'h0;
+            RS1_D_r <= 5'h0; RS2_D_r <= 5'h0;
+            ALUSrcA_D_r <= 1'b0; PCTargetSrcD_r <= 1'b0;
+        end
+        else if (FlushE == 1'b1 || FlushD == 1'b1) begin
+            // Flush Logic: Clear Control Signals to 0 (NOP)
             RegWriteD_r <= 1'b0;
             ALUSrcD_r <= 1'b0;
             MemWriteD_r <= 1'b0;
@@ -133,34 +121,23 @@ module Decode_Cycle(
             BranchD_r <= 3'b000;
             JumpD_r <= 1'b0;
             ALUControlD_r <= 4'b0000;
-            RD1_D_r <= 32'h00000000;
-            RD2_D_r <= 32'h00000000;
-            Imm_Ext_D_r <= 32'h00000000;
-            RD_D_r <= 5'h00;
-            PCD_r <= 32'h00000000;
-            PCPlus4D_r <= 32'h00000000;
-            RS1_D_r <= 5'h00;
-            RS2_D_r <= 5'h00;
-            // Reset New Registers
             ALUSrcA_D_r <= 1'b0;
             PCTargetSrcD_r <= 1'b0;
+            // Data registers can hold garbage or 0, doesn't matter for NOP
+        end
+        else if (StallD == 1'b1) begin
+            // Stall Logic: Do not update registers (Hold value)
         end
         else begin
+            // Normal Operation
             RegWriteD_r <= RegWriteD;
             ALUSrcD_r <= ALUSrcD;
             MemWriteD_r <= MemWriteD;
             ResultSrcD_r <= ResultSrcD;
-            // Assuming Control Unit handles Branch decoding internally to output 3-bit BranchD
-            // If Control Unit outputs 1-bit, you might need: BranchD_r <= {2'b0, BranchD};
-            // Based on your previous Control_Unit_1, it outputs [2:0] Branch, so this is fine:
-            // If connection is missing above, ensure Control_Unit_1 is updated.
-            // For now assuming existing wires match.
-             BranchD_r <= 3'b000; // Placeholder if Control Unit doesn't output Branch bus
-            // NOTE: You must verify if your Control_Unit_1 has .Branch(BranchD) port.
-            
+            BranchD_r <= BranchD;
             JumpD_r <= JumpD;
             ALUControlD_r <= ALUControlD;
-            RD1_D_r <= RD1_D_mux;
+            RD1_D_r <= RD1_D_mux; 
             RD2_D_r <= RD2_D_mux;
             Imm_Ext_D_r <= Imm_Ext_D;
             RD_D_r <= InstrD[11:7];
@@ -168,8 +145,6 @@ module Decode_Cycle(
             PCPlus4D_r <= PCPlus4D;
             RS1_D_r <= InstrD[19:15];
             RS2_D_r <= InstrD[24:20];
-            
-            // Update New Registers
             ALUSrcA_D_r <= ALUSrcA_D;
             PCTargetSrcD_r <= PCTargetSrcD;
         end
